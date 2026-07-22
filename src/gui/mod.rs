@@ -273,6 +273,7 @@ impl HangarApp {
                 return;
             }
             let Some(claude) = state.claude.clone() else {
+                drop(state);
                 self.set_status(&self.status_ready_text());
                 return;
             };
