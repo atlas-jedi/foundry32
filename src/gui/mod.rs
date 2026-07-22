@@ -104,12 +104,7 @@ fn build_app(settings: AppSettings) -> HangarApp {
     let widths = [170, 130, 190, 60, 240, 130];
     let titles = [tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
     for (i, (w, title)) in widths.iter().zip(titles.iter()).enumerate() {
-        listview.insert_column(nwg::InsertListViewColumn {
-            index: Some(i as i32),
-            fmt: None,
-            width: Some(*w),
-            text: Some((*title).into()),
-        });
+        insert_report_list_view_column(&listview, i as i32, *w, title);
     }
 
     let mut details = nwg::TextBox::default();
@@ -624,4 +619,32 @@ fn open_in_browser(url: &str) {
         .args(["/C", "start", "", url])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
+}
+
+/// Inserts a report-view list view column via a direct `LVM_INSERTCOLUMNW` call.
+///
+/// `nwg::ListView::insert_column` unconditionally probes the existing column
+/// count first by sending `LVM_GETCOLUMNWIDTH` in a loop until it returns 0 —
+/// a message Microsoft documents as valid only for LVS_LIST/LVS_ICON views.
+/// Sent against our LVS_REPORT (Detailed) list view, it never returns 0,
+/// spinning the UI thread at 100% CPU forever before the message pump even
+/// starts. We always supply an explicit column index, so that probed count
+/// is never used — this reimplements only the needed subset of the call.
+fn insert_report_list_view_column(listview: &nwg::ListView, index: i32, width: i32, text: &str) {
+    use winapi::um::commctrl::{LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVM_INSERTCOLUMNW};
+    use winapi::um::winuser::SendMessageW;
+
+    let Some(handle) = listview.handle.hwnd() else { return };
+    let scaled_width = (width as f64 * nwg::scale_factor()) as i32;
+    let mut wide_text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut column: LVCOLUMNW = unsafe { std::mem::zeroed() };
+    column.mask = LVCF_TEXT | LVCF_WIDTH;
+    column.cx = scaled_width;
+    column.pszText = wide_text.as_mut_ptr();
+    column.cchTextMax = wide_text.len() as i32;
+
+    unsafe {
+        SendMessageW(handle, LVM_INSERTCOLUMNW, index as usize, &mut column as *mut LVCOLUMNW as isize);
+    }
 }
