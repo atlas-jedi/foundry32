@@ -1,3 +1,4 @@
+mod discovery;
 mod i18n;
 mod model;
 mod settings;
