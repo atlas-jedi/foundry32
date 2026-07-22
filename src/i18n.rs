@@ -82,6 +82,7 @@ pub struct T {
     pub confirm_remove_body: &'static str,
     pub op_done: &'static str,
     pub op_error_title: &'static str,
+    pub replace_removed_warning: &'static str,
     pub dlg_title_add: &'static str,
     pub dlg_title_edit: &'static str,
     pub dlg_name: &'static str,
@@ -103,6 +104,8 @@ pub struct T {
     pub dlg_err_dir: &'static str,
     pub dlg_err_env: &'static str,
     pub dlg_err_headers: &'static str,
+    pub dlg_env_blank_confirm_title: &'static str,
+    pub dlg_env_blank_confirm_body: &'static str,
     pub warn_claude_missing: &'static str,
 }
 
@@ -153,6 +156,7 @@ static PT: T = T {
     confirm_remove_body: "Remover \"%S\"? Um backup da configuração será salvo em ~\\.claude\\backups\\mcp-hangar antes.",
     op_done: "Alteração aplicada.",
     op_error_title: "Falha na operação",
+    replace_removed_warning: "Atenção: a entrada original já tinha sido removida antes da falha — ela não existe mais. Backup da configuração em ~\\.claude\\backups\\mcp-hangar.",
     dlg_title_add: "Adicionar servidor MCP",
     dlg_title_edit: "Editar servidor MCP",
     dlg_name: "Nome:",
@@ -174,6 +178,8 @@ static PT: T = T {
     dlg_err_dir: "A pasta do projeto informada não existe.",
     dlg_err_env: "Linha de env inválida — use CHAVE=VALOR.",
     dlg_err_headers: "Linha de header inválida — use Chave: Valor.",
+    dlg_env_blank_confirm_title: "Valores de env vazios",
+    dlg_env_blank_confirm_body: "Estas variáveis serão salvas com valor VAZIO (valores não são lidos ao editar): %K\r\n\r\nContinuar mesmo assim?",
     warn_claude_missing: "CLI do Claude Code não encontrado — connectors da conta (claude.ai) não puderam ser listados.",
 };
 
@@ -224,6 +230,7 @@ static EN: T = T {
     confirm_remove_body: "Remove \"%S\"? A configuration backup will be saved to ~\\.claude\\backups\\mcp-hangar first.",
     op_done: "Change applied.",
     op_error_title: "Operation failed",
+    replace_removed_warning: "Warning: the original entry had already been removed before the failure — it no longer exists. Configuration backup at ~\\.claude\\backups\\mcp-hangar.",
     dlg_title_add: "Add MCP server",
     dlg_title_edit: "Edit MCP server",
     dlg_name: "Name:",
@@ -245,6 +252,8 @@ static EN: T = T {
     dlg_err_dir: "The given project folder does not exist.",
     dlg_err_env: "Invalid env line — use KEY=VALUE.",
     dlg_err_headers: "Invalid header line — use Key: Value.",
+    dlg_env_blank_confirm_title: "Empty env values",
+    dlg_env_blank_confirm_body: "These variables will be saved with an EMPTY value (values are not read when editing): %K\r\n\r\nContinue anyway?",
     warn_claude_missing: "Claude Code CLI not found — account connectors (claude.ai) could not be listed.",
 };
 

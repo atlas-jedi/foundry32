@@ -18,12 +18,6 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// True when a change to this entry propagates to every computer
-    /// logged into the same claude.ai account.
-    pub fn is_account_wide(&self) -> bool {
-        matches!(self, Scope::Account)
-    }
-
     /// Entries this app can add/edit/remove through the `claude mcp` CLI.
     pub fn is_editable(&self) -> bool {
         matches!(self, Scope::User | Scope::Project { .. } | Scope::Local { .. })

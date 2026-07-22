@@ -18,13 +18,18 @@ use std::sync::{Arc, Mutex};
 const CONNECTORS_URL: &str = "https://claude.ai/settings/connectors";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+pub(crate) struct MutationFailure {
+    pub message: String,
+    pub original_removed: bool,
+}
+
 /// Mailbox written by worker threads (CLI listing, update check, mutations,
 /// dialog outcome), drained on the UI thread when the Notice fires.
 #[derive(Default)]
 pub(crate) struct Shared {
     pub cli: Option<Result<Vec<CliListEntry>, String>>,
     pub update: Option<Result<Option<UpdateInfo>, String>>,
-    pub mutation: Option<Result<(), String>>,
+    pub mutation: Option<Result<(), MutationFailure>>,
     pub dialog: Option<Option<ServerDraft>>,
 }
 
@@ -231,6 +236,8 @@ fn wire_events(app: &Rc<HangarApp>) {
             E::OnListViewItemChanged | E::OnListViewClick if handle == app.listview.handle => {
                 if let nwg::EventData::OnListViewItemIndex { row_index, .. } = evt_data {
                     app.select_row(row_index);
+                } else if let nwg::EventData::OnListViewItemChanged { row_index, selected: true, .. } = evt_data {
+                    app.select_row(row_index);
                 }
             }
             E::OnNotice if handle == app.notice.handle => app.drain_shared(),
@@ -310,22 +317,23 @@ impl HangarApp {
         let shared = Arc::clone(&self.shared);
         let sender = self.notice.sender();
         std::thread::spawn(move || {
-            let result = (|| match &op {
+            let result: Result<(), MutationFailure> = (|| match &op {
                 MutationOp::Add(draft) => {
-                    mutation::backup_configs(&draft.scope)?;
-                    mutation::add_server(&claude, draft)
+                    mutation::backup_configs(&draft.scope).map_err(plain)?;
+                    mutation::add_server(&claude, draft).map_err(plain)
                 }
                 MutationOp::Remove { name, scope } => {
-                    mutation::backup_configs(scope)?;
-                    mutation::remove_server(&claude, name, scope)
+                    mutation::backup_configs(scope).map_err(plain)?;
+                    mutation::remove_server(&claude, name, scope).map_err(plain)
                 }
                 MutationOp::Replace { original_name, original_scope, draft } => {
-                    mutation::backup_configs(original_scope)?;
+                    mutation::backup_configs(original_scope).map_err(plain)?;
                     if draft.scope != *original_scope {
-                        mutation::backup_configs(&draft.scope)?;
+                        mutation::backup_configs(&draft.scope).map_err(plain)?;
                     }
-                    mutation::remove_server(&claude, original_name, original_scope)?;
+                    mutation::remove_server(&claude, original_name, original_scope).map_err(plain)?;
                     mutation::add_server(&claude, draft)
+                        .map_err(|message| MutationFailure { message, original_removed: true })
                 }
             })();
             shared.lock().unwrap().mutation = Some(result);
@@ -366,9 +374,13 @@ impl HangarApp {
                     self.set_status(self.tr().op_done);
                     self.refresh();
                 }
-                Err(error) => {
-                    nwg::modal_error_message(&self.window.handle, self.tr().op_error_title, &error);
-                    self.set_status(&self.tr().status_error.replace("%E", &error));
+                Err(failure) => {
+                    let mut message = failure.message;
+                    if failure.original_removed {
+                        message = format!("{}\r\n\r\n{}", self.tr().replace_removed_warning, message);
+                    }
+                    nwg::modal_error_message(&self.window.handle, self.tr().op_error_title, &message);
+                    self.set_status(&self.tr().status_error.replace("%E", &message));
                 }
             }
         }
@@ -410,6 +422,7 @@ impl HangarApp {
             self.listview.insert_items_row(None, &row);
         }
         drop(state);
+        self.state.borrow_mut().selected_row = None;
         self.details.set_text(self.tr().details_placeholder);
         self.btn_edit.set_enabled(false);
         self.btn_remove.set_enabled(false);
@@ -533,6 +546,10 @@ impl HangarApp {
     fn set_status(&self, text: &str) {
         self.status_bar.set_text(0, text);
     }
+}
+
+fn plain(message: String) -> MutationFailure {
+    MutationFailure { message, original_removed: false }
 }
 
 fn scope_label(scope: &Scope, tr: &T) -> &'static str {

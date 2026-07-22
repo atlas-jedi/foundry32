@@ -53,7 +53,12 @@ fn run_dump(out_path: &str) {
             model::Scope::Local { project_dir } => format!("LOCAL({project_dir})"),
             model::Scope::Unknown => "UNKNOWN".to_string(),
         };
-        let reach = if server.scope.is_account_wide() { "account-wide" } else { "machine-local" };
+        let reach = match &server.scope {
+            model::Scope::Account => "account-wide",
+            model::Scope::Project { .. } => "repo-shared",
+            model::Scope::Unknown => "unknown",
+            _ => "machine-local",
+        };
         report.push_str(&format!(
             "{} | {} | {} | {} | {} | {}\n",
             server.name,

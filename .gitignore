@@ -2,5 +2,8 @@
 /dist
 *.bak
 dump.txt
+mcp-hangar-dump.txt
+mcp-hangar-update.txt
+update.txt
 /.superpowers
 /docs/superpowers/

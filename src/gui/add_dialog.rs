@@ -192,6 +192,7 @@ fn run_dialog(params: DialogParams) {
     let shared = Arc::clone(&params.shared);
     let notify = params.notify;
     let lang = params.lang;
+    let editing = params.editing;
     let known_dirs = params.known_dirs.clone();
     let handler = nwg::full_bind_event_handler(&window_handle, move |evt, _evt_data, handle| {
         use nwg::Event as E;
@@ -206,6 +207,27 @@ fn run_dialog(params: DialogParams) {
             E::OnButtonClick if handle == ui.ok_btn.handle => {
                 match build_draft(&ui, lang) {
                     Ok(draft) => {
+                        if editing {
+                            let blank_keys: Vec<&str> = draft
+                                .env
+                                .iter()
+                                .filter(|(_, value)| value.is_empty())
+                                .map(|(key, _)| key.as_str())
+                                .collect();
+                            if !blank_keys.is_empty() {
+                                let tr = t(lang);
+                                let body = tr.dlg_env_blank_confirm_body.replace("%K", &blank_keys.join(", "));
+                                let choice = nwg::modal_message(&ui.window.handle, &nwg::MessageParams {
+                                    title: tr.dlg_env_blank_confirm_title,
+                                    content: &body,
+                                    buttons: nwg::MessageButtons::YesNo,
+                                    icons: nwg::MessageIcons::Warning,
+                                });
+                                if choice != nwg::MessageChoice::Yes {
+                                    return; // stay in the dialog
+                                }
+                            }
+                        }
                         send_outcome(&shared, &notify, Some(draft));
                         ui.window.close();
                     }
