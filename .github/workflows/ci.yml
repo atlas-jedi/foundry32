@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add x86 MSVC target
+        run: rustup target add i686-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --target i686-pc-windows-msvc --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --release --target i686-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-hangar-x86
+          path: target/i686-pc-windows-msvc/release/mcp-hangar.exe
