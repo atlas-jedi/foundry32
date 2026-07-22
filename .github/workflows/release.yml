@@ -10,6 +10,10 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # Code signing is optional: the signing steps are skipped until the
+      # SignPath Foundation secret/vars exist (see docs/code-signing.md).
+      SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +30,27 @@ jobs:
       - name: Build (x86 release)
         run: cargo build --release --target i686-pc-windows-msvc
 
+      - name: Upload unsigned exe (for signing)
+        id: unsigned-exe
+        if: env.SIGNING_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: target/i686-pc-windows-msvc/release/mcp-hangar.exe
+
+      - name: Sign mcp-hangar.exe (SignPath Foundation)
+        if: env.SIGNING_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: mcp-hangar
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: target/i686-pc-windows-msvc/release
+
       - name: Compile installer (Inno Setup)
         shell: pwsh
         run: |
@@ -37,6 +62,27 @@ jobs:
           $ver = $env:GITHUB_REF_NAME.TrimStart('v')
           & $iscc /DMyAppVersion=$ver installer\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Upload unsigned installer (for signing)
+        id: unsigned-installer
+        if: env.SIGNING_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: dist/MCP-Hangar-Setup-*-x86.exe
+
+      - name: Sign installer (SignPath Foundation)
+        if: env.SIGNING_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: mcp-hangar
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: dist
 
       - name: Package portable zip
         shell: pwsh

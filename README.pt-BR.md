@@ -48,6 +48,18 @@ Cada release também traz um zip portátil.
 
 Requer o Claude Code instalado (o app usa o CLI `claude`).
 
+### SmartScreen do Windows
+
+As releases ainda não são assinadas digitalmente — a assinatura gratuita para
+projetos open source via [SignPath Foundation](https://signpath.org) está
+sendo configurada ([detalhes](docs/code-signing.md)). Até lá, o SmartScreen
+mostra "O Windows protegeu o computador" ao executar um download recente:
+clique em **Mais informações → Executar assim mesmo**. Todo binário de release
+é compilado publicamente pelo
+[GitHub Actions](.github/workflows/release.yml) direto de uma tag de versão —
+dá para auditar exatamente o que entrou nele, ou compilar do código-fonte
+abaixo.
+
 ## Compilar do código-fonte
 
 ```
