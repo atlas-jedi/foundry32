@@ -1,6 +1,6 @@
 [package]
 name = "mcp-hangar"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Native Windows GUI to inspect and manage Claude Code MCP servers, with clear account-level vs local scope identification"
 license = "MIT"
