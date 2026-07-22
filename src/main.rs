@@ -1,4 +1,5 @@
 mod discovery;
+mod gui;
 mod i18n;
 mod model;
 mod mutation;
