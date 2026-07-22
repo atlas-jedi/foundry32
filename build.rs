@@ -2,14 +2,23 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/app.rc");
     println!("cargo:rerun-if-changed=assets/app.manifest");
     println!("cargo:rerun-if-changed=assets/hangar.ico");
-    // On toolchains without a resource compiler (local GNU dev builds) this warns
-    // and skips instead of failing; CI/MSVC embeds icon + manifest for real.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        embed_resource::compile("assets/app.rc", embed_resource::NONE)
-    })) {
-        Ok(_) => {},
-        Err(_) => {
-            println!("cargo:warning=resource embedding skipped: windres not found");
-        }
+
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_env == "msvc" {
+        // Release builds (CI): fail loudly if RC.EXE is missing or the resource
+        // script does not compile — the shipped exe must carry the icon and the
+        // comctl32/DPI manifest.
+        embed_resource::compile("assets/app.rc", embed_resource::NONE);
+        return;
+    }
+
+    // Local GNU dev builds usually lack a resource compiler and embed-resource
+    // panics in that case. Warn and skip — the app runs fine without embedded
+    // resources during development.
+    let attempt = std::panic::catch_unwind(|| {
+        embed_resource::compile("assets/app.rc", embed_resource::NONE);
+    });
+    if attempt.is_err() {
+        println!("cargo:warning=resource embedding skipped (no resource compiler on this toolchain)");
     }
 }
