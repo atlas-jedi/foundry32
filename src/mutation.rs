@@ -31,8 +31,7 @@ pub fn backup_configs(scope: &Scope) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    let dir = backups_root().join(stamp.to_string());
-    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let dir = create_unique_backup_dir(stamp)?;
 
     let claude_json = claude_json_path();
     if claude_json.exists() {
@@ -48,6 +47,26 @@ pub fn backup_configs(scope: &Scope) -> Result<(), String> {
     }
     prune_old_backups();
     Ok(())
+}
+
+/// Same-second backups get a `-N` suffix instead of overwriting each other.
+fn create_unique_backup_dir(stamp: u64) -> Result<PathBuf, String> {
+    let root = backups_root();
+    fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    let mut suffix = 0u32;
+    loop {
+        let name = if suffix == 0 {
+            stamp.to_string()
+        } else {
+            format!("{stamp}-{suffix}")
+        };
+        let dir = root.join(name);
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => suffix += 1,
+            Err(e) => return Err(format!("create {}: {e}", dir.display())),
+        }
+    }
 }
 
 fn prune_old_backups() {
