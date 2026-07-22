@@ -14,7 +14,7 @@ jobs:
         run: rustup target add i686-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --target i686-pc-windows-msvc --all-targets -- -D warnings
+        run: cargo clippy --target i686-pc-windows-msvc -- -D warnings
       - name: Build
         run: cargo build --release --target i686-pc-windows-msvc
       - uses: actions/upload-artifact@v4

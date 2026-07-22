@@ -33,6 +33,7 @@ jobs:
           if (-not (Test-Path $iscc)) {
             choco install innosetup -y --no-progress
           }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
           $ver = $env:GITHUB_REF_NAME.TrimStart('v')
           & $iscc /DMyAppVersion=$ver installer\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
@@ -41,6 +42,7 @@ jobs:
         shell: pwsh
         run: |
           $ver = $env:GITHUB_REF_NAME.TrimStart('v')
+          New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path target\i686-pc-windows-msvc\release\mcp-hangar.exe `
             -DestinationPath "dist\mcp-hangar-$ver-x86-portable.zip"
 
@@ -50,4 +52,5 @@ jobs:
           files: |
             dist/MCP-Hangar-Setup-*-x86.exe
             dist/mcp-hangar-*-x86-portable.zip
+          fail_on_unmatched_files: true
           generate_release_notes: true
