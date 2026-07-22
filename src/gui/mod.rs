@@ -1,6 +1,8 @@
-//! Main window: server list with scope/reach columns, details pane, action buttons.
+//! Main window: menu bar, server list with scope/reach columns, details pane,
+//! classic-style action buttons and a three-part status bar.
 
 pub mod add_dialog;
+pub mod preferences_dialog;
 
 use crate::discovery::{self, cli::CliListEntry, Discovery};
 use crate::i18n::{t, Lang, T};
@@ -16,7 +18,44 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const CONNECTORS_URL: &str = "https://claude.ai/settings/connectors";
+const REPO_URL: &str = "https://github.com/atlas-jedi/mcp-hangar";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+// Layout metrics in logical pixels (nwg setters apply the DPI scale).
+const MARGIN: i32 = 8;
+const BUTTON_W: i32 = 110;
+const BUTTON_H: i32 = 26;
+const BUTTON_GAP: i32 = 6;
+const GROUP_GAP: i32 = 18;
+const DETAILS_W: i32 = 330;
+const STATUS_SERVERS_W: i32 = 130;
+const STATUS_VERSION_W: i32 = 90;
+const STATUS_UPDATE_W: i32 = 230;
+const VK_F5: u32 = 0x74;
+
+/// Segoe MDL2 Assets glyphs (the system icon font on Windows 10/11).
+const GLYPH_CHECKMARK: u16 = 0xE73E;
+const GLYPH_WARNING: u16 = 0xE7BA;
+const GLYPH_ERROR: u16 = 0xE783;
+/// Fluent state colors as (r, g, b).
+const COLOR_OK: (u8, u8, u8) = (0x10, 0x7C, 0x10);
+const COLOR_WARNING: (u8, u8, u8) = (0x9D, 0x5D, 0x00);
+const COLOR_ERROR: (u8, u8, u8) = (0xC4, 0x2B, 0x1C);
+
+/// Which state icon the status bar message part shows.
+#[derive(Clone, Copy)]
+enum StatusTone {
+    Busy,
+    Ok,
+    Warning,
+    Error,
+}
+
+struct StatusIcons {
+    ok: winapi::shared::windef::HICON,
+    warning: winapi::shared::windef::HICON,
+    error: winapi::shared::windef::HICON,
+}
 
 pub(crate) struct MutationFailure {
     pub message: String,
@@ -24,13 +63,14 @@ pub(crate) struct MutationFailure {
 }
 
 /// Mailbox written by worker threads (CLI listing, update check, mutations,
-/// dialog outcome), drained on the UI thread when the Notice fires.
+/// dialog outcomes), drained on the UI thread when the Notice fires.
 #[derive(Default)]
 pub(crate) struct Shared {
     pub cli: Option<Result<Vec<CliListEntry>, String>>,
     pub update: Option<Result<Option<UpdateInfo>, String>>,
     pub mutation: Option<Result<(), MutationFailure>>,
     pub dialog: Option<Option<ServerDraft>>,
+    pub preferences: Option<Option<Lang>>,
 }
 
 enum MutationOp {
@@ -48,23 +88,34 @@ struct UiState {
     selected_row: Option<usize>,
     editing: Option<(String, Scope)>,
     update_url: Option<String>,
+    update_version: Option<String>,
 }
 
 pub struct HangarApp {
     window: nwg::Window,
-    _grid: nwg::GridLayout,
-    legend: nwg::Label,
-    update_btn: nwg::Button,
     listview: nwg::ListView,
     details: nwg::TextBox,
     btn_add: nwg::Button,
     btn_edit: nwg::Button,
     btn_remove: nwg::Button,
     btn_refresh: nwg::Button,
-    btn_connectors: nwg::Button,
-    lang_label: nwg::Label,
-    lang_combo: nwg::ComboBox<String>,
+    menu_file: nwg::Menu,
+    mi_prefs: nwg::MenuItem,
+    mi_exit: nwg::MenuItem,
+    menu_servers: nwg::Menu,
+    mi_add: nwg::MenuItem,
+    mi_edit: nwg::MenuItem,
+    mi_remove: nwg::MenuItem,
+    mi_refresh: nwg::MenuItem,
+    mi_connectors: nwg::MenuItem,
+    menu_help: nwg::Menu,
+    mi_site: nwg::MenuItem,
+    mi_download: nwg::MenuItem,
+    mi_scopes: nwg::MenuItem,
+    mi_about: nwg::MenuItem,
+    _menu_seps: Vec<nwg::MenuSeparator>,
     status_bar: nwg::StatusBar,
+    status_icons: StatusIcons,
     notice: nwg::Notice,
     state: RefCell<UiState>,
     shared: Arc<Mutex<Shared>>,
@@ -75,6 +126,9 @@ pub fn run() {
     let _ = nwg::Font::set_global_family("Segoe UI");
     let app = Rc::new(build_app(AppSettings::load()));
     wire_events(&app);
+    app.redraw_menu_bar();
+    app.layout();
+    app.set_version_text();
     app.refresh();
     app.spawn_update_check();
     nwg::dispatch_thread_events();
@@ -93,11 +147,43 @@ fn build_app(settings: AppSettings) -> HangarApp {
         .build(&mut window)
         .expect("window");
 
-    let mut legend = nwg::Label::default();
-    nwg::Label::builder().parent(&window).text(tr.legend).build(&mut legend).expect("legend");
+    let mut menu_seps = Vec::new();
+    let mut separator = |parent: &nwg::Menu| {
+        let mut sep = nwg::MenuSeparator::default();
+        nwg::MenuSeparator::builder().parent(parent).build(&mut sep).expect("menu separator");
+        menu_seps.push(sep);
+    };
+    let menu = |text: &str, parent: &nwg::Window| {
+        let mut control = nwg::Menu::default();
+        nwg::Menu::builder().text(text).parent(parent).build(&mut control).expect("menu");
+        control
+    };
+    let item = |text: &str, parent: &nwg::Menu| {
+        let mut control = nwg::MenuItem::default();
+        nwg::MenuItem::builder().text(text).parent(parent).build(&mut control).expect("menu item");
+        control
+    };
 
-    let mut update_btn = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text("").build(&mut update_btn).expect("update_btn");
+    let menu_file = menu(tr.menu_file, &window);
+    let mi_prefs = item(tr.menu_file_prefs, &menu_file);
+    separator(&menu_file);
+    let mi_exit = item(tr.menu_file_exit, &menu_file);
+
+    let menu_servers = menu(tr.menu_servers, &window);
+    let mi_add = item(tr.menu_srv_add, &menu_servers);
+    let mi_edit = item(tr.menu_srv_edit, &menu_servers);
+    let mi_remove = item(tr.menu_srv_remove, &menu_servers);
+    separator(&menu_servers);
+    let mi_refresh = item(tr.menu_srv_refresh, &menu_servers);
+    separator(&menu_servers);
+    let mi_connectors = item(tr.menu_srv_connectors, &menu_servers);
+
+    let menu_help = menu(tr.menu_help, &window);
+    let mi_site = item(tr.menu_help_site, &menu_help);
+    let mi_download = item(tr.menu_help_download, &menu_help);
+    separator(&menu_help);
+    let mi_scopes = item(tr.menu_help_scopes, &menu_help);
+    let mi_about = item(tr.menu_help_about, &menu_help);
 
     let mut listview = nwg::ListView::default();
     nwg::ListView::builder()
@@ -106,11 +192,15 @@ fn build_app(settings: AppSettings) -> HangarApp {
         .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID)
         .build(&mut listview)
         .expect("listview");
+    // nwg forces LVS_NOCOLUMNHEADER at creation for backward compatibility —
+    // re-enable the column header (Wireshark-style report view).
+    listview.set_headers_enabled(true);
     let widths = [170, 130, 190, 60, 240, 130];
     let titles = [tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
     for (i, (w, title)) in widths.iter().zip(titles.iter()).enumerate() {
         insert_report_list_view_column(&listview, i as i32, *w, title);
     }
+    apply_explorer_theme(&listview.handle);
 
     let mut details = nwg::TextBox::default();
     nwg::TextBox::builder()
@@ -121,26 +211,16 @@ fn build_app(settings: AppSettings) -> HangarApp {
         .build(&mut details)
         .expect("details");
 
-    let mut btn_add = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text(tr.btn_add).build(&mut btn_add).expect("btn_add");
-    let mut btn_edit = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text(tr.btn_edit).build(&mut btn_edit).expect("btn_edit");
-    let mut btn_remove = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text(tr.btn_remove).build(&mut btn_remove).expect("btn_remove");
-    let mut btn_refresh = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text(tr.btn_refresh).build(&mut btn_refresh).expect("btn_refresh");
-    let mut btn_connectors = nwg::Button::default();
-    nwg::Button::builder().parent(&window).text(tr.btn_connectors).build(&mut btn_connectors).expect("btn_connectors");
-
-    let mut lang_label = nwg::Label::default();
-    nwg::Label::builder().parent(&window).text(tr.lang_label).build(&mut lang_label).expect("lang_label");
-    let mut lang_combo = nwg::ComboBox::default();
-    nwg::ComboBox::builder()
-        .parent(&window)
-        .collection(vec!["Português (BR)".to_string(), "English".to_string()])
-        .selected_index(Some(match lang { Lang::PtBr => 0, Lang::En => 1 }))
-        .build(&mut lang_combo)
-        .expect("lang_combo");
+    let button = |text: &str, parent: &nwg::Window| {
+        let mut control = nwg::Button::default();
+        nwg::Button::builder().parent(parent).text(text).build(&mut control).expect("button");
+        apply_classic_button_theme(&control);
+        control
+    };
+    let btn_add = button(tr.btn_add, &window);
+    let btn_edit = button(tr.btn_edit, &window);
+    let btn_remove = button(tr.btn_remove, &window);
+    let btn_refresh = button(tr.btn_refresh, &window);
 
     let mut status_bar = nwg::StatusBar::default();
     nwg::StatusBar::builder().parent(&window).text("").build(&mut status_bar).expect("status_bar");
@@ -155,43 +235,37 @@ fn build_app(settings: AppSettings) -> HangarApp {
         }
     }
 
-    let grid = nwg::GridLayout::default();
-    nwg::GridLayout::builder()
-        .parent(&window)
-        .spacing(4)
-        .child_item(nwg::GridLayoutItem::new(&legend, 0, 0, 10, 1))
-        .child_item(nwg::GridLayoutItem::new(&update_btn, 10, 0, 2, 1))
-        .child_item(nwg::GridLayoutItem::new(&listview, 0, 1, 8, 11))
-        .child_item(nwg::GridLayoutItem::new(&details, 8, 1, 4, 11))
-        .child_item(nwg::GridLayoutItem::new(&btn_add, 0, 12, 1, 1))
-        .child_item(nwg::GridLayoutItem::new(&btn_edit, 1, 12, 1, 1))
-        .child_item(nwg::GridLayoutItem::new(&btn_remove, 2, 12, 1, 1))
-        .child_item(nwg::GridLayoutItem::new(&btn_refresh, 3, 12, 1, 1))
-        .child_item(nwg::GridLayoutItem::new(&btn_connectors, 5, 12, 3, 1))
-        .child_item(nwg::GridLayoutItem::new(&lang_label, 9, 12, 1, 1))
-        .child_item(nwg::GridLayoutItem::new(&lang_combo, 10, 12, 2, 1))
-        .build(&grid)
-        .expect("grid");
-
-    update_btn.set_visible(false);
+    mi_download.set_enabled(false);
+    mi_edit.set_enabled(false);
+    mi_remove.set_enabled(false);
     btn_edit.set_enabled(false);
     btn_remove.set_enabled(false);
 
     HangarApp {
         window,
-        _grid: grid,
-        legend,
-        update_btn,
         listview,
         details,
         btn_add,
         btn_edit,
         btn_remove,
         btn_refresh,
-        btn_connectors,
-        lang_label,
-        lang_combo,
+        menu_file,
+        mi_prefs,
+        mi_exit,
+        menu_servers,
+        mi_add,
+        mi_edit,
+        mi_remove,
+        mi_refresh,
+        mi_connectors,
+        menu_help,
+        mi_site,
+        mi_download,
+        mi_scopes,
+        mi_about,
+        _menu_seps: menu_seps,
         status_bar,
+        status_icons: create_status_icons(),
         notice,
         state: RefCell::new(UiState {
             lang,
@@ -202,6 +276,7 @@ fn build_app(settings: AppSettings) -> HangarApp {
             selected_row: None,
             editing: None,
             update_url: None,
+            update_version: None,
         }),
         shared: Arc::new(Mutex::new(Shared::default())),
     }
@@ -214,6 +289,9 @@ fn wire_events(app: &Rc<HangarApp>) {
         use nwg::Event as E;
         match evt {
             E::OnWindowClose if handle == app.window.handle => nwg::stop_thread_dispatch(),
+            E::OnResize | E::OnResizeEnd | E::OnWindowMaximize if handle == app.window.handle => {
+                app.layout();
+            }
             E::OnButtonClick => {
                 if handle == app.btn_add.handle {
                     app.open_dialog(None);
@@ -223,16 +301,43 @@ fn wire_events(app: &Rc<HangarApp>) {
                     app.remove_selected();
                 } else if handle == app.btn_refresh.handle {
                     app.refresh();
-                } else if handle == app.btn_connectors.handle {
+                }
+            }
+            E::OnMenuItemSelected => {
+                if handle == app.mi_exit.handle {
+                    nwg::stop_thread_dispatch();
+                } else if handle == app.mi_add.handle {
+                    app.open_dialog(None);
+                } else if handle == app.mi_edit.handle {
+                    app.edit_selected();
+                } else if handle == app.mi_remove.handle {
+                    app.remove_selected();
+                } else if handle == app.mi_refresh.handle {
+                    app.refresh();
+                } else if handle == app.mi_connectors.handle {
                     open_in_browser(CONNECTORS_URL);
-                } else if handle == app.update_btn.handle {
+                } else if handle == app.mi_prefs.handle {
+                    app.open_preferences();
+                } else if handle == app.mi_site.handle {
+                    open_in_browser(REPO_URL);
+                } else if handle == app.mi_download.handle {
                     let url = app.state.borrow().update_url.clone();
                     if let Some(url) = url {
                         open_in_browser(&url);
                     }
+                } else if handle == app.mi_scopes.handle {
+                    app.show_scopes_help();
+                } else if handle == app.mi_about.handle {
+                    app.show_about();
                 }
             }
-            E::OnComboxBoxSelection if handle == app.lang_combo.handle => app.change_language(),
+            E::OnKeyRelease => {
+                if let nwg::EventData::OnKey(VK_F5) = evt_data {
+                    if !app.state.borrow().mutating {
+                        app.refresh();
+                    }
+                }
+            }
             E::OnListViewItemChanged | E::OnListViewClick if handle == app.listview.handle => {
                 if let nwg::EventData::OnListViewItemIndex { row_index, .. } = evt_data {
                     app.select_row(row_index);
@@ -251,6 +356,68 @@ fn wire_events(app: &Rc<HangarApp>) {
 impl HangarApp {
     fn tr(&self) -> &'static T {
         t(self.state.borrow().lang)
+    }
+
+    /// Manual layout: list + details side by side, button row bottom-left,
+    /// status bar parts right-aligned. Replaces GridLayout, which stretched
+    /// every control to its cell.
+    fn layout(&self) {
+        let (width, height) = self.window.size();
+        let (width, height) = (width as i32, height as i32);
+        if width < 320 || height < 220 {
+            return;
+        }
+        let status_h = self.status_bar_height();
+        let button_y = height - status_h - BUTTON_H - MARGIN;
+        let content_h = (button_y - 2 * MARGIN).max(60) as u32;
+        let details_w = DETAILS_W.min(width / 3);
+        let details_x = width - MARGIN - details_w;
+        let list_w = (details_x - 2 * MARGIN).max(120) as u32;
+
+        self.listview.set_position(MARGIN, MARGIN);
+        self.listview.set_size(list_w, content_h);
+        self.details.set_position(details_x, MARGIN);
+        self.details.set_size(details_w as u32, content_h);
+
+        let mut x = MARGIN;
+        for button in [&self.btn_add, &self.btn_edit, &self.btn_remove] {
+            button.set_position(x, button_y);
+            button.set_size(BUTTON_W as u32, BUTTON_H as u32);
+            x += BUTTON_W + BUTTON_GAP;
+        }
+        x += GROUP_GAP;
+        self.btn_refresh.set_position(x, button_y);
+        self.btn_refresh.set_size(BUTTON_W as u32, BUTTON_H as u32);
+
+        self.set_status_parts();
+    }
+
+    /// Status bar height in logical pixels (nwg's StatusBar exposes no size getter).
+    fn status_bar_height(&self) -> i32 {
+        use winapi::um::winuser::GetWindowRect;
+        let Some(hwnd) = self.status_bar.handle.hwnd() else { return 23 };
+        let mut rect: winapi::shared::windef::RECT = unsafe { std::mem::zeroed() };
+        unsafe { GetWindowRect(hwnd, &mut rect) };
+        ((rect.bottom - rect.top) as f64 / nwg::scale_factor()) as i32
+    }
+
+    /// Splits the status bar into message | server count | version parts.
+    fn set_status_parts(&self) {
+        use winapi::um::commctrl::SB_SETPARTS;
+        use winapi::um::winuser::SendMessageW;
+        let Some(hwnd) = self.status_bar.handle.hwnd() else { return };
+        let scale = nwg::scale_factor();
+        let px = |v: i32| (v as f64 * scale) as i32;
+        let width = px(self.window.size().0 as i32);
+        let right_w = if self.state.borrow().update_version.is_some() {
+            px(STATUS_UPDATE_W)
+        } else {
+            px(STATUS_VERSION_W)
+        };
+        let edges = [width - px(STATUS_SERVERS_W) - right_w, width - right_w, -1i32];
+        unsafe {
+            SendMessageW(hwnd, SB_SETPARTS, edges.len(), edges.as_ptr() as isize);
+        }
     }
 
     fn refresh(&self) {
@@ -276,13 +443,13 @@ impl HangarApp {
             }
             let Some(claude) = state.claude.clone() else {
                 drop(state);
-                self.set_status(&self.status_ready_text());
+                self.set_ready_status();
                 return;
             };
             state.cli_running = true;
             claude
         };
-        self.set_status(self.tr().status_cli_running);
+        self.set_status(self.tr().status_cli_running, StatusTone::Busy);
         let shared = Arc::clone(&self.shared);
         let sender = self.notice.sender();
         std::thread::spawn(move || {
@@ -313,7 +480,7 @@ impl HangarApp {
         };
         self.state.borrow_mut().mutating = true;
         self.set_action_buttons_enabled(false);
-        self.set_status(self.tr().status_mutating);
+        self.set_status(self.tr().status_mutating, StatusTone::Busy);
         let shared = Arc::clone(&self.shared);
         let sender = self.notice.sender();
         std::thread::spawn(move || {
@@ -342,9 +509,15 @@ impl HangarApp {
     }
 
     fn drain_shared(&self) {
-        let (cli, update, mutation_result, dialog) = {
+        let (cli, update, mutation_result, dialog, preferences) = {
             let mut shared = self.shared.lock().unwrap();
-            (shared.cli.take(), shared.update.take(), shared.mutation.take(), shared.dialog.take())
+            (
+                shared.cli.take(),
+                shared.update.take(),
+                shared.mutation.take(),
+                shared.dialog.take(),
+                shared.preferences.take(),
+            )
         };
 
         if let Some(result) = cli {
@@ -354,16 +527,15 @@ impl HangarApp {
                     discovery::merge_cli_entries(&mut self.state.borrow_mut().discovery, entries);
                     self.populate_list();
                 }
-                Err(error) => self.state.borrow_mut().discovery.warnings.push(error),
+                Err(error) => {
+                    self.state.borrow_mut().discovery.warnings.push(error);
+                    self.set_ready_status();
+                }
             }
-            self.set_status(&self.status_ready_text());
         }
 
         if let Some(Ok(Some(info))) = update {
-            let label = self.tr().update_available.replace("%V", &info.latest_version);
-            self.update_btn.set_text(&label);
-            self.update_btn.set_visible(true);
-            self.state.borrow_mut().update_url = Some(info.html_url);
+            self.apply_update_available(info);
         }
 
         if let Some(result) = mutation_result {
@@ -371,7 +543,7 @@ impl HangarApp {
             self.set_action_buttons_enabled(true);
             match result {
                 Ok(()) => {
-                    self.set_status(self.tr().op_done);
+                    self.set_status(self.tr().op_done, StatusTone::Ok);
                     self.refresh();
                 }
                 Err(failure) => {
@@ -380,7 +552,7 @@ impl HangarApp {
                         message = format!("{}\r\n\r\n{}", self.tr().replace_removed_warning, message);
                     }
                     nwg::modal_error_message(&self.window.handle, self.tr().op_error_title, &message);
-                    self.set_status(&self.tr().status_error.replace("%E", &message));
+                    self.set_status(&self.tr().status_error.replace("%E", &message), StatusTone::Error);
                 }
             }
         }
@@ -398,6 +570,34 @@ impl HangarApp {
                 self.spawn_mutation(op);
             }
         }
+
+        if let Some(outcome) = preferences {
+            self.window.set_enabled(true);
+            if let Some(lang) = outcome {
+                let changed = {
+                    let mut state = self.state.borrow_mut();
+                    let changed = state.lang != lang;
+                    state.lang = lang;
+                    changed
+                };
+                if changed {
+                    let _ = AppSettings { lang }.save();
+                    self.relabel_all();
+                }
+            }
+        }
+    }
+
+    fn apply_update_available(&self, info: UpdateInfo) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.update_url = Some(info.html_url);
+            state.update_version = Some(info.latest_version);
+        }
+        self.set_status_parts();
+        self.set_version_text();
+        self.relabel_download_item();
+        self.mi_download.set_enabled(true);
     }
 
     fn populate_list(&self) {
@@ -426,7 +626,10 @@ impl HangarApp {
         self.details.set_text(self.tr().details_placeholder);
         self.btn_edit.set_enabled(false);
         self.btn_remove.set_enabled(false);
-        self.set_status(&self.status_ready_text());
+        self.mi_edit.set_enabled(false);
+        self.mi_remove.set_enabled(false);
+        self.set_ready_status();
+        self.set_server_count_text();
     }
 
     fn select_row(&self, row: usize) {
@@ -440,6 +643,8 @@ impl HangarApp {
         self.details.set_text(&text);
         self.btn_edit.set_enabled(editable);
         self.btn_remove.set_enabled(editable);
+        self.mi_edit.set_enabled(editable);
+        self.mi_remove.set_enabled(editable);
     }
 
     fn edit_selected(&self) {
@@ -494,26 +699,34 @@ impl HangarApp {
         add_dialog::spawn(params);
     }
 
-    fn change_language(&self) {
-        let lang = match self.lang_combo.selection() {
-            Some(1) => Lang::En,
-            _ => Lang::PtBr,
+    fn open_preferences(&self) {
+        let params = preferences_dialog::PreferencesParams {
+            lang: self.state.borrow().lang,
+            shared: Arc::clone(&self.shared),
+            notify: self.notice.sender(),
         };
-        self.state.borrow_mut().lang = lang;
-        let _ = AppSettings { lang }.save();
-        self.relabel_all();
+        self.window.set_enabled(false);
+        preferences_dialog::spawn(params);
+    }
+
+    fn show_scopes_help(&self) {
+        let tr = self.tr();
+        nwg::modal_info_message(&self.window.handle, tr.help_scopes_title, tr.help_scopes_body);
+    }
+
+    fn show_about(&self) {
+        let tr = self.tr();
+        let body = tr.about_body.replace("%V", update_check::CURRENT_VERSION);
+        nwg::modal_info_message(&self.window.handle, tr.about_title, &body);
     }
 
     fn relabel_all(&self) {
         let tr = self.tr();
         self.window.set_text(tr.app_title);
-        self.legend.set_text(tr.legend);
         self.btn_add.set_text(tr.btn_add);
         self.btn_edit.set_text(tr.btn_edit);
         self.btn_remove.set_text(tr.btn_remove);
         self.btn_refresh.set_text(tr.btn_refresh);
-        self.btn_connectors.set_text(tr.btn_connectors);
-        self.lang_label.set_text(tr.lang_label);
         let titles = [tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
         for (i, title) in titles.iter().enumerate() {
             self.listview.update_column(i, nwg::InsertListViewColumn {
@@ -523,28 +736,99 @@ impl HangarApp {
                 text: Some((*title).into()),
             });
         }
+        self.relabel_menus();
+        self.set_version_text();
         self.populate_list();
     }
 
-    fn set_action_buttons_enabled(&self, enabled: bool) {
-        self.btn_add.set_enabled(enabled);
-        self.btn_edit.set_enabled(enabled && self.state.borrow().selected_row.is_some());
-        self.btn_remove.set_enabled(enabled && self.state.borrow().selected_row.is_some());
+    fn relabel_menus(&self) {
+        let tr = self.tr();
+        set_submenu_text(&self.menu_file, tr.menu_file);
+        set_submenu_text(&self.menu_servers, tr.menu_servers);
+        set_submenu_text(&self.menu_help, tr.menu_help);
+        set_menu_item_text(&self.mi_prefs, tr.menu_file_prefs);
+        set_menu_item_text(&self.mi_exit, tr.menu_file_exit);
+        set_menu_item_text(&self.mi_add, tr.menu_srv_add);
+        set_menu_item_text(&self.mi_edit, tr.menu_srv_edit);
+        set_menu_item_text(&self.mi_remove, tr.menu_srv_remove);
+        set_menu_item_text(&self.mi_refresh, tr.menu_srv_refresh);
+        set_menu_item_text(&self.mi_connectors, tr.menu_srv_connectors);
+        set_menu_item_text(&self.mi_site, tr.menu_help_site);
+        set_menu_item_text(&self.mi_scopes, tr.menu_help_scopes);
+        set_menu_item_text(&self.mi_about, tr.menu_help_about);
+        self.relabel_download_item();
+        self.redraw_menu_bar();
     }
 
-    fn status_ready_text(&self) -> String {
-        let state = self.state.borrow();
-        let tr = t(state.lang);
-        let mut text = tr.status_ready.replace("%N", &state.discovery.servers.len().to_string());
-        if !state.discovery.warnings.is_empty() {
-            text.push_str("   ⚠ ");
-            text.push_str(&state.discovery.warnings.join(" | "));
+    /// Repaints the menu bar frame — needed after attaching menus to an
+    /// already-visible window and after in-place caption updates.
+    fn redraw_menu_bar(&self) {
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            unsafe { winapi::um::winuser::DrawMenuBar(hwnd) };
         }
-        text
     }
 
-    fn set_status(&self, text: &str) {
+    fn relabel_download_item(&self) {
+        let tr = self.tr();
+        let label = match &self.state.borrow().update_version {
+            Some(version) => tr.menu_help_download_v.replace("%V", version),
+            None => tr.menu_help_download.to_string(),
+        };
+        set_menu_item_text(&self.mi_download, &label);
+    }
+
+    fn set_action_buttons_enabled(&self, enabled: bool) {
+        let has_selection = self.state.borrow().selected_row.is_some();
+        self.btn_add.set_enabled(enabled);
+        self.btn_edit.set_enabled(enabled && has_selection);
+        self.btn_remove.set_enabled(enabled && has_selection);
+        self.mi_add.set_enabled(enabled);
+        self.mi_edit.set_enabled(enabled && has_selection);
+        self.mi_remove.set_enabled(enabled && has_selection);
+    }
+
+    /// "Ready" or the joined warnings, with the matching state icon.
+    fn set_ready_status(&self) {
+        let (text, tone) = {
+            let state = self.state.borrow();
+            let tr = t(state.lang);
+            if state.discovery.warnings.is_empty() {
+                (tr.status_left_ready.to_string(), StatusTone::Ok)
+            } else {
+                (state.discovery.warnings.join("  |  "), StatusTone::Warning)
+            }
+        };
+        self.set_status(&text, tone);
+    }
+
+    fn set_status(&self, text: &str, tone: StatusTone) {
+        use winapi::um::commctrl::SB_SETICON;
+        use winapi::um::winuser::SendMessageW;
         self.status_bar.set_text(0, text);
+        let Some(hwnd) = self.status_bar.handle.hwnd() else { return };
+        let icon = match tone {
+            StatusTone::Busy => std::ptr::null_mut(),
+            StatusTone::Ok => self.status_icons.ok,
+            StatusTone::Warning => self.status_icons.warning,
+            StatusTone::Error => self.status_icons.error,
+        };
+        unsafe {
+            SendMessageW(hwnd, SB_SETICON, 0, icon as isize);
+        }
+    }
+
+    fn set_server_count_text(&self) {
+        let count = self.state.borrow().discovery.servers.len().to_string();
+        let text = self.tr().status_servers.replace("%N", &count);
+        self.status_bar.set_text(1, &text);
+    }
+
+    fn set_version_text(&self) {
+        let text = match &self.state.borrow().update_version {
+            Some(version) => self.tr().status_update.replace("%V", version),
+            None => format!("v{}", update_check::CURRENT_VERSION),
+        };
+        self.status_bar.set_text(2, &text);
     }
 }
 
@@ -636,6 +920,167 @@ fn open_in_browser(url: &str) {
         .args(["/C", "start", "", url])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
+}
+
+/// Renders a themed (comctl32 v6) button with the classic 3D bevel look by
+/// pointing the theme manager at a non-existent theme — the documented
+/// `SetWindowTheme(hwnd, L" ", L" ")` fallback-to-classic trick.
+pub(crate) fn apply_classic_button_theme(button: &nwg::Button) {
+    set_window_theme(&button.handle, " ", Some(" "));
+}
+
+/// Explorer item styling for the list view (hover highlight, softer selection),
+/// matching what Explorer/Wireshark report views look like.
+fn apply_explorer_theme(handle: &nwg::ControlHandle) {
+    set_window_theme(handle, "Explorer", None);
+}
+
+fn create_status_icons() -> StatusIcons {
+    let size = (16.0 * nwg::scale_factor()) as i32;
+    StatusIcons {
+        ok: create_glyph_icon(GLYPH_CHECKMARK, COLOR_OK, size),
+        warning: create_glyph_icon(GLYPH_WARNING, COLOR_WARNING, size),
+        error: create_glyph_icon(GLYPH_ERROR, COLOR_ERROR, size),
+    }
+}
+
+/// Renders one Segoe MDL2 Assets glyph (the native Windows 10/11 icon font)
+/// into a colored ARGB icon: the glyph is drawn white on black, the coverage
+/// becomes the alpha channel, and the fill color is premultiplied in. Returns
+/// null on failure — callers treat that as "no icon".
+fn create_glyph_icon(glyph: u16, (r, g, b): (u8, u8, u8), size: i32) -> winapi::shared::windef::HICON {
+    use winapi::shared::windef::RECT;
+    use winapi::um::wingdi::{
+        CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+        GdiFlush, SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
+        DIB_RGB_COLORS, FW_NORMAL, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    };
+    use winapi::um::winuser::{
+        CreateIconIndirect, DrawTextW, GetDC, ReleaseDC, DT_CENTER, DT_NOCLIP, DT_SINGLELINE,
+        DT_VCENTER, ICONINFO,
+    };
+
+    unsafe {
+        let screen_dc = GetDC(std::ptr::null_mut());
+        let memory_dc = CreateCompatibleDC(screen_dc);
+        if memory_dc.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
+        }
+
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = size;
+        info.bmiHeader.biHeight = -size; // top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        let mut bits: *mut winapi::ctypes::c_void = std::ptr::null_mut();
+        let color_bitmap = CreateDIBSection(memory_dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        if color_bitmap.is_null() || bits.is_null() {
+            DeleteDC(memory_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
+        }
+        let previous_bitmap = SelectObject(memory_dc, color_bitmap as _);
+
+        let face: Vec<u16> = "Segoe MDL2 Assets\0".encode_utf16().collect();
+        let font = CreateFontW(
+            -size, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face.as_ptr(),
+        );
+        let previous_font = SelectObject(memory_dc, font as _);
+        SetTextColor(memory_dc, 0x00FF_FFFF);
+        SetBkMode(memory_dc, TRANSPARENT as i32);
+        let mut rect = RECT { left: 0, top: 0, right: size, bottom: size };
+        let text = [glyph];
+        DrawTextW(memory_dc, text.as_ptr(), 1, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+        GdiFlush();
+
+        let pixels = bits as *mut u32;
+        for offset in 0..(size * size) as usize {
+            let coverage = *pixels.add(offset) & 0xFF;
+            let premultiply = |channel: u8| (channel as u32 * coverage) / 255;
+            *pixels.add(offset) =
+                (coverage << 24) | (premultiply(r) << 16) | (premultiply(g) << 8) | premultiply(b);
+        }
+
+        SelectObject(memory_dc, previous_font);
+        DeleteObject(font as _);
+        SelectObject(memory_dc, previous_bitmap);
+
+        let mask_bits = vec![0u8; (size as usize).div_ceil(8) * 2 * size as usize];
+        let mask_bitmap = CreateBitmap(size, size, 1, 1, mask_bits.as_ptr() as _);
+        let mut icon_info = ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask_bitmap,
+            hbmColor: color_bitmap,
+        };
+        let icon = CreateIconIndirect(&mut icon_info);
+
+        DeleteObject(mask_bitmap as _);
+        DeleteObject(color_bitmap as _);
+        DeleteDC(memory_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+        icon
+    }
+}
+
+fn set_window_theme(handle: &nwg::ControlHandle, app_name: &str, id_list: Option<&str>) {
+    use winapi::um::uxtheme::SetWindowTheme;
+    let Some(hwnd) = handle.hwnd() else { return };
+    let wide = |text: &str| text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let app_name_wide = wide(app_name);
+    let id_list_wide = id_list.map(wide);
+    let id_list_ptr = id_list_wide.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    unsafe {
+        SetWindowTheme(hwnd, app_name_wide.as_ptr(), id_list_ptr);
+    }
+}
+
+/// Updates a menu item's caption in place (nwg has no set_text for menu items).
+pub(crate) fn set_menu_item_text(item: &nwg::MenuItem, text: &str) {
+    use winapi::um::winuser::{SetMenuItemInfoW, MENUITEMINFOW, MIIM_STRING};
+    let nwg::ControlHandle::MenuItem(parent, id) = item.handle else { return };
+    let mut wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+    info.fMask = MIIM_STRING;
+    info.dwTypeData = wide.as_mut_ptr();
+    unsafe {
+        SetMenuItemInfoW(parent, id, 0, &info);
+    }
+}
+
+/// Updates a top-level menu caption by locating its position in the parent
+/// menu bar via its HMENU (submenus have no command id to address them by).
+fn set_submenu_text(menu: &nwg::Menu, text: &str) {
+    use winapi::um::winuser::{
+        GetMenuItemCount, GetMenuItemInfoW, SetMenuItemInfoW, MENUITEMINFOW, MIIM_STRING, MIIM_SUBMENU,
+    };
+    let nwg::ControlHandle::Menu(parent, own) = menu.handle else { return };
+    let count = unsafe { GetMenuItemCount(parent) }.max(0) as u32;
+    for position in 0..count {
+        let mut probe: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+        probe.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+        probe.fMask = MIIM_SUBMENU;
+        let found = unsafe { GetMenuItemInfoW(parent, position, 1, &mut probe) };
+        if found == 0 || probe.hSubMenu != own {
+            continue;
+        }
+        let mut wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+        info.fMask = MIIM_STRING;
+        info.dwTypeData = wide.as_mut_ptr();
+        unsafe {
+            SetMenuItemInfoW(parent, position, 1, &info);
+        }
+        return;
+    }
 }
 
 /// Inserts a report-view list view column via a direct `LVM_INSERTCOLUMNW` call.

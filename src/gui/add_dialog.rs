@@ -2,7 +2,7 @@
 //! (nwg multithread dialog pattern) and reports the outcome through
 //! `Shared.dialog` + a Notice back to the main window.
 
-use super::Shared;
+use super::{apply_classic_button_theme, Shared};
 use crate::i18n::{t, Lang};
 use crate::model::{Scope, Transport};
 use crate::mutation::{split_command, ServerDraft};
@@ -151,6 +151,7 @@ fn run_dialog(params: DialogParams) {
         .size((100, 30))
         .build(&mut ok_btn)
         .expect("ok_btn");
+    apply_classic_button_theme(&ok_btn);
     let mut cancel_btn = nwg::Button::default();
     nwg::Button::builder()
         .parent(&window)
@@ -159,6 +160,7 @@ fn run_dialog(params: DialogParams) {
         .size((100, 30))
         .build(&mut cancel_btn)
         .expect("cancel_btn");
+    apply_classic_button_theme(&cancel_btn);
 
     let ui = DialogUi {
         window,

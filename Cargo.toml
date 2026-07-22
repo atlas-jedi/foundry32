@@ -1,6 +1,6 @@
 [package]
 name = "mcp-hangar"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 description = "Native Windows GUI to inspect and manage Claude Code MCP servers, with clear account-level vs local scope identification"
 license = "MIT"
@@ -8,10 +8,10 @@ repository = "https://github.com/atlas-jedi/mcp-hangar"
 
 [dependencies]
 native-windows-gui = { version = "1.0.13", features = [
-    "list-view", "combobox", "textbox", "notice", "status-bar",
+    "list-view", "listbox", "combobox", "textbox", "notice", "status-bar",
     "tooltip", "message-window", "cursor", "menu", "embed-resource", "high-dpi",
 ] }
-winapi = { version = "0.3.9", features = ["winnls", "winuser", "commctrl"] }
+winapi = { version = "0.3.9", features = ["winnls", "winuser", "commctrl", "uxtheme", "wingdi"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 minreq = { version = "2", features = ["https-native"] }
 
