@@ -14,31 +14,75 @@ jobs:
       # Code signing is optional: the signing steps are skipped until the
       # SignPath Foundation secret/vars exist (see docs/code-signing.md).
       SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      REL_DIR: target/i686-pc-windows-msvc/release
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check tag matches Cargo.toml version
+      # The repo tag (v*) tracks the Foundry32 (hub) version. Also verify each
+      # tool's version in registry.json matches its crate, so the catalog can
+      # never advertise a version the release didn't build.
+      - name: Validate versions
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME.TrimStart('v')
-          $cargoVer = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ($tag -ne $cargoVer) { throw "tag $tag != Cargo.toml version $cargoVer" }
+          $hubVer = (Select-String -Path crates/foundry32/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $hubVer) { throw "tag $tag != foundry32 crate version $hubVer" }
+          $reg = Get-Content registry.json -Raw | ConvertFrom-Json
+          if ($reg.schema -ne 1) { throw "registry.json schema must be 1" }
+          foreach ($tool in $reg.tools) {
+            $cargo = "crates/$($tool.id)/Cargo.toml"
+            if (Test-Path $cargo) {
+              $crateVer = (Select-String -Path $cargo -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+              if ($tool.version -ne $crateVer) { throw "registry $($tool.id) $($tool.version) != crate $crateVer" }
+            }
+          }
 
       - name: Add x86 MSVC target
         run: rustup target add i686-pc-windows-msvc
 
-      - name: Build (x86 release)
-        run: cargo build --release --target i686-pc-windows-msvc
+      - name: Build (workspace, x86 release)
+        run: cargo build --release --workspace --target i686-pc-windows-msvc
 
-      - name: Upload unsigned exe (for signing)
+      # Generate the release's registry.json from the versioned metadata plus the
+      # SHA-256/size of the binaries just built, and produce SHA256SUMS.txt. The
+      # gate fails the release if any tool lacks a built asset. This is what
+      # resolves the chicken-and-egg: the catalog and the assets are produced
+      # together, in-job, so hashes are always consistent.
+      - name: Generate registry.json + SHA256SUMS
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $repo = $env:GITHUB_REPOSITORY
+          $relDir = $env:REL_DIR
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $reg = Get-Content registry.json -Raw | ConvertFrom-Json
+          $sums = New-Object System.Collections.Generic.List[string]
+          foreach ($tool in $reg.tools) {
+            $exe = Join-Path $relDir $tool.exe
+            if (-not (Test-Path $exe)) { throw "registry gate: no built asset for '$($tool.id)': $exe" }
+            $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+            if ($hash.Length -ne 64) { throw "registry gate: bad sha for $($tool.id)" }
+            $tool.sha256 = $hash
+            $tool.size_bytes = [int64](Get-Item $exe).Length
+            $tool.download_url = "https://github.com/$repo/releases/download/$tag/$($tool.exe)"
+            $sums.Add("$hash  $($tool.exe)")
+          }
+          # Also checksum the hub itself and the installer (produced below).
+          $hubHash = (Get-FileHash (Join-Path $relDir 'foundry32.exe') -Algorithm SHA256).Hash.ToLower()
+          $sums.Add("$hubHash  foundry32.exe")
+          $json = $reg | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$PWD\dist\registry.json", $json, (New-Object System.Text.UTF8Encoding $false))
+          $sums | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload unsigned hub exe (for signing)
         id: unsigned-exe
         if: env.SIGNING_ENABLED == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-exe
-          path: target/i686-pc-windows-msvc/release/mcp-hangar.exe
+          path: ${{ env.REL_DIR }}/foundry32.exe
 
-      - name: Sign mcp-hangar.exe (SignPath Foundation)
+      - name: Sign foundry32.exe (SignPath Foundation)
         if: env.SIGNING_ENABLED == 'true'
         uses: signpath/github-action-submit-signing-request@v2
         with:
@@ -49,7 +93,7 @@ jobs:
           github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 1800
-          output-artifact-directory: target/i686-pc-windows-msvc/release
+          output-artifact-directory: ${{ env.REL_DIR }}
 
       - name: Compile installer (Inno Setup)
         shell: pwsh
@@ -69,7 +113,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-installer
-          path: dist/MCP-Hangar-Setup-*-x86.exe
+          path: dist/Foundry32-Setup-*-x86.exe
 
       - name: Sign installer (SignPath Foundation)
         if: env.SIGNING_ENABLED == 'true'
@@ -84,19 +128,25 @@ jobs:
           wait-for-completion-timeout-in-seconds: 1800
           output-artifact-directory: dist
 
-      - name: Package portable zip
+      - name: Stage tool + hub assets
         shell: pwsh
         run: |
           $ver = $env:GITHUB_REF_NAME.TrimStart('v')
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path target\i686-pc-windows-msvc\release\mcp-hangar.exe `
-            -DestinationPath "dist\mcp-hangar-$ver-x86-portable.zip"
+          $relDir = $env:REL_DIR
+          Copy-Item (Join-Path $relDir 'mcp-console.exe') dist\mcp-console.exe
+          Copy-Item (Join-Path $relDir 'foundry32.exe') dist\foundry32.exe
+          Compress-Archive -Path (Join-Path $relDir 'foundry32.exe') `
+            -DestinationPath "dist\foundry32-$ver-x86-portable.zip" -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/MCP-Hangar-Setup-*-x86.exe
-            dist/mcp-hangar-*-x86-portable.zip
+            dist/Foundry32-Setup-*-x86.exe
+            dist/foundry32-*-x86-portable.zip
+            dist/foundry32.exe
+            dist/mcp-console.exe
+            dist/registry.json
+            dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: true

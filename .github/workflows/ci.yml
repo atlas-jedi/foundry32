@@ -13,11 +13,15 @@ jobs:
       - name: Add x86 MSVC target
         run: rustup target add i686-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy
-        run: cargo clippy --target i686-pc-windows-msvc -- -D warnings
-      - name: Build
-        run: cargo build --release --target i686-pc-windows-msvc
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --target i686-pc-windows-msvc -- -D warnings
+      - name: Build (workspace, x86 release)
+        run: cargo build --release --workspace --target i686-pc-windows-msvc
       - uses: actions/upload-artifact@v4
         with:
-          name: mcp-hangar-x86
-          path: target/i686-pc-windows-msvc/release/mcp-hangar.exe
+          name: foundry32-x86
+          path: target/i686-pc-windows-msvc/release/foundry32.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-console-x86
+          path: target/i686-pc-windows-msvc/release/mcp-console.exe
