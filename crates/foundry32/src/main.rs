@@ -3,6 +3,7 @@
 mod download;
 mod engine;
 mod gui;
+mod i18n;
 mod installed;
 mod model;
 mod paths;

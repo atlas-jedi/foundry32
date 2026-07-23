@@ -7,11 +7,17 @@
 
 use native_windows_gui as nwg;
 
-/// Renders a themed (comctl32 v6) button with the classic 3D bevel look by
-/// pointing the theme manager at a non-existent theme — the documented
-/// `SetWindowTheme(hwnd, L" ", L" ")` fallback-to-classic trick.
+/// Gives any control the classic (Windows 32-bit) look by pointing the theme
+/// manager at a non-existent theme — the documented `SetWindowTheme(hwnd, L" ",
+/// L" ")` fallback-to-classic trick. On a button that's a 3D bevel; on a
+/// progress bar it's the segmented block style.
+pub fn apply_classic_theme(handle: &nwg::ControlHandle) {
+    set_window_theme(handle, " ", Some(" "));
+}
+
+/// Renders a themed (comctl32 v6) button with the classic 3D bevel look.
 pub fn apply_classic_button_theme(button: &nwg::Button) {
-    set_window_theme(&button.handle, " ", Some(" "));
+    apply_classic_theme(&button.handle);
 }
 
 /// Explorer item styling for the list view (hover highlight, softer selection),
