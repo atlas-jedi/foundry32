@@ -1,17 +1,22 @@
-; MCP Hangar — Inno Setup 6 script (x86 app, installs under Program Files (x86))
+; Foundry32 — Inno Setup 6 script (x86 app, installs under Program Files (x86)).
+; Installs the hub only; tools (MCP Console, ...) are downloaded by the hub into
+; %LOCALAPPDATA%, so they are not part of this installer.
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
 #ifndef ExeDir
   #define ExeDir "..\target\i686-pc-windows-msvc\release"
 #endif
-#define MyAppName "MCP Hangar"
+#define MyAppName "Foundry32"
 #define MyAppPublisher "Software Imperial"
 #define MyAppURL "https://github.com/atlas-jedi/mcp-hangar"
-#define MyAppExeName "mcp-hangar.exe"
+#define MyAppExeName "foundry32.exe"
 
 [Setup]
-AppId={{D3F8A2C1-7B4E-4E9A-9C5D-2A6F81B0E437}
+; New AppId (distinct from MCP Hangar's) — this is a different product, so there
+; is no in-place upgrade from a Hangar install; the release notes say to remove
+; MCP Hangar first.
+AppId={{A7E3F1B2-9C4D-4E8A-B5F6-1D2C3E4F5A6B}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -22,8 +27,8 @@ DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-OutputBaseFilename=MCP-Hangar-Setup-{#MyAppVersion}-x86
-SetupIconFile=..\assets\hangar.ico
+OutputBaseFilename=Foundry32-Setup-{#MyAppVersion}-x86
+SetupIconFile=..\crates\foundry32\assets\foundry32.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
