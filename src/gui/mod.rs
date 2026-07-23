@@ -2,6 +2,7 @@
 //! classic-style action buttons and a three-part status bar.
 
 pub mod add_dialog;
+pub mod manual_dialog;
 pub mod preferences_dialog;
 
 use crate::discovery::{self, cli::CliListEntry, Discovery};
@@ -71,6 +72,7 @@ pub(crate) struct Shared {
     pub mutation: Option<Result<(), MutationFailure>>,
     pub dialog: Option<Option<ServerDraft>>,
     pub preferences: Option<Option<Lang>>,
+    pub manual: Option<()>,
 }
 
 enum MutationOp {
@@ -111,7 +113,7 @@ pub struct HangarApp {
     menu_help: nwg::Menu,
     mi_site: nwg::MenuItem,
     mi_download: nwg::MenuItem,
-    mi_scopes: nwg::MenuItem,
+    mi_manual: nwg::MenuItem,
     mi_about: nwg::MenuItem,
     _menu_seps: Vec<nwg::MenuSeparator>,
     status_bar: nwg::StatusBar,
@@ -182,7 +184,7 @@ fn build_app(settings: AppSettings) -> HangarApp {
     let mi_site = item(tr.menu_help_site, &menu_help);
     let mi_download = item(tr.menu_help_download, &menu_help);
     separator(&menu_help);
-    let mi_scopes = item(tr.menu_help_scopes, &menu_help);
+    let mi_manual = item(tr.menu_help_manual, &menu_help);
     let mi_about = item(tr.menu_help_about, &menu_help);
 
     let mut listview = nwg::ListView::default();
@@ -195,8 +197,8 @@ fn build_app(settings: AppSettings) -> HangarApp {
     // nwg forces LVS_NOCOLUMNHEADER at creation for backward compatibility —
     // re-enable the column header (Wireshark-style report view).
     listview.set_headers_enabled(true);
-    let widths = [170, 130, 190, 60, 240, 130];
-    let titles = [tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
+    let widths = [36, 170, 130, 190, 60, 240, 130];
+    let titles = [tr.col_num, tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
     for (i, (w, title)) in widths.iter().zip(titles.iter()).enumerate() {
         insert_report_list_view_column(&listview, i as i32, *w, title);
     }
@@ -261,7 +263,7 @@ fn build_app(settings: AppSettings) -> HangarApp {
         menu_help,
         mi_site,
         mi_download,
-        mi_scopes,
+        mi_manual,
         mi_about,
         _menu_seps: menu_seps,
         status_bar,
@@ -325,8 +327,8 @@ fn wire_events(app: &Rc<HangarApp>) {
                     if let Some(url) = url {
                         open_in_browser(&url);
                     }
-                } else if handle == app.mi_scopes.handle {
-                    app.show_scopes_help();
+                } else if handle == app.mi_manual.handle {
+                    app.open_manual();
                 } else if handle == app.mi_about.handle {
                     app.show_about();
                 }
@@ -509,7 +511,7 @@ impl HangarApp {
     }
 
     fn drain_shared(&self) {
-        let (cli, update, mutation_result, dialog, preferences) = {
+        let (cli, update, mutation_result, dialog, preferences, manual) = {
             let mut shared = self.shared.lock().unwrap();
             (
                 shared.cli.take(),
@@ -517,6 +519,7 @@ impl HangarApp {
                 shared.mutation.take(),
                 shared.dialog.take(),
                 shared.preferences.take(),
+                shared.manual.take(),
             )
         };
 
@@ -571,6 +574,10 @@ impl HangarApp {
             }
         }
 
+        if manual.is_some() {
+            self.window.set_enabled(true);
+        }
+
         if let Some(outcome) = preferences {
             self.window.set_enabled(true);
             if let Some(lang) = outcome {
@@ -604,7 +611,7 @@ impl HangarApp {
         self.listview.clear();
         let state = self.state.borrow();
         let tr = t(state.lang);
-        for server in &state.discovery.servers {
+        for (index, server) in state.discovery.servers.iter().enumerate() {
             let target = if server.target.chars().count() > 70 {
                 let head: String = server.target.chars().take(69).collect();
                 format!("{head}…")
@@ -612,6 +619,7 @@ impl HangarApp {
                 server.target.clone()
             };
             let row = [
+                (index + 1).to_string(),
                 server.name.clone(),
                 scope_label(&server.scope, tr).to_string(),
                 reach_label(&server.scope, tr).to_string(),
@@ -709,9 +717,14 @@ impl HangarApp {
         preferences_dialog::spawn(params);
     }
 
-    fn show_scopes_help(&self) {
-        let tr = self.tr();
-        nwg::modal_info_message(&self.window.handle, tr.help_scopes_title, tr.help_scopes_body);
+    fn open_manual(&self) {
+        let params = manual_dialog::ManualParams {
+            lang: self.state.borrow().lang,
+            shared: Arc::clone(&self.shared),
+            notify: self.notice.sender(),
+        };
+        self.window.set_enabled(false);
+        manual_dialog::spawn(params);
     }
 
     fn show_about(&self) {
@@ -727,7 +740,7 @@ impl HangarApp {
         self.btn_edit.set_text(tr.btn_edit);
         self.btn_remove.set_text(tr.btn_remove);
         self.btn_refresh.set_text(tr.btn_refresh);
-        let titles = [tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
+        let titles = [tr.col_num, tr.col_name, tr.col_scope, tr.col_reach, tr.col_type, tr.col_target, tr.col_status];
         for (i, title) in titles.iter().enumerate() {
             self.listview.update_column(i, nwg::InsertListViewColumn {
                 index: Some(i as i32),
@@ -754,7 +767,7 @@ impl HangarApp {
         set_menu_item_text(&self.mi_refresh, tr.menu_srv_refresh);
         set_menu_item_text(&self.mi_connectors, tr.menu_srv_connectors);
         set_menu_item_text(&self.mi_site, tr.menu_help_site);
-        set_menu_item_text(&self.mi_scopes, tr.menu_help_scopes);
+        set_menu_item_text(&self.mi_manual, tr.menu_help_manual);
         set_menu_item_text(&self.mi_about, tr.menu_help_about);
         self.relabel_download_item();
         self.redraw_menu_bar();

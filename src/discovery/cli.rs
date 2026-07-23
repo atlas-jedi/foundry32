@@ -1,7 +1,9 @@
 //! Runs `claude mcp list` and parses its plain-text output. Account connectors
 //! are the lines whose name starts with "claude.ai ". Output format per line:
 //! `<name>: <target> - <status>`, e.g.
-//! `claude.ai Example: https://mcp.example.com/mcp - ✔ Connected`
+//! `claude.ai Example: https://mcp.example.com/mcp - [check] Connected`
+//! (the CLI prefixes the status with a check/cross mark, stripped on parse —
+//! the UI is symbol-free by design).
 
 use crate::winproc::run_captured;
 use std::path::{Path, PathBuf};
@@ -63,8 +65,15 @@ fn parse_mcp_list_output(output: &str) -> Vec<CliListEntry> {
         entries.push(CliListEntry {
             name: name.trim().to_string(),
             target: target.to_string(),
-            status: status.trim().to_string(),
+            status: clean_status(status),
         });
     }
     entries
+}
+
+/// Drops the CLI's decorative check/cross/warning marks — the UI shows plain
+/// text only.
+fn clean_status(raw: &str) -> String {
+    const MARKS: [char; 7] = ['✔', '✘', '✗', '✓', '⚠', '❌', '\u{FE0F}'];
+    raw.trim().trim_start_matches(MARKS).trim_start().to_string()
 }
