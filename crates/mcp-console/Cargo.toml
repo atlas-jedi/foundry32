@@ -1,8 +1,8 @@
-# NOTE: crate/bin still named `mcp-hangar` here — the rename to `mcp-console`
-# is a separate step so this workspace move stays behavior-identical.
+# MCP Console — the first tool in the Foundry32 hub. Versioned independently
+# from the hub; 2.0.0 marks the rename from the MCP Hangar 1.x line.
 [package]
-name = "mcp-hangar"
-version = "1.1.0"
+name = "mcp-console"
+version = "2.0.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

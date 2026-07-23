@@ -6,7 +6,6 @@ mod i18n;
 mod model;
 mod mutation;
 mod settings;
-mod update_check;
 
 use std::fs;
 
@@ -16,16 +15,8 @@ fn main() {
         let out = args
             .get(position + 1)
             .cloned()
-            .unwrap_or_else(|| "mcp-hangar-dump.txt".into());
+            .unwrap_or_else(|| "mcp-console-dump.txt".into());
         run_dump(&out);
-        return;
-    }
-    if let Some(position) = args.iter().position(|a| a == "--check-update") {
-        let out = args
-            .get(position + 1)
-            .cloned()
-            .unwrap_or_else(|| "mcp-hangar-update.txt".into());
-        run_check_update(&out);
         return;
     }
     gui::run();
@@ -72,13 +63,4 @@ fn run_dump(out_path: &str) {
         report.push_str(&format!("WARN: {warning}\n"));
     }
     let _ = fs::write(out_path, report);
-}
-
-fn run_check_update(out_path: &str) {
-    let line = match update_check::check_for_update() {
-        Ok(Some(info)) => format!("update-available {} {}", info.latest_version, info.html_url),
-        Ok(None) => format!("up-to-date {}", update_check::CURRENT_VERSION),
-        Err(error) => format!("error {error}"),
-    };
-    let _ = fs::write(out_path, line);
 }

@@ -42,8 +42,6 @@ pub struct T {
     pub menu_srv_connectors: &'static str,
     pub menu_help: &'static str,
     pub menu_help_site: &'static str,
-    pub menu_help_download: &'static str,
-    pub menu_help_download_v: &'static str,
     pub menu_help_manual: &'static str,
     pub menu_help_about: &'static str,
     pub manual_title: &'static str,
@@ -61,7 +59,6 @@ pub struct T {
     pub lang_label: &'static str,
     pub status_left_ready: &'static str,
     pub status_servers: &'static str,
-    pub status_update: &'static str,
     pub status_cli_running: &'static str,
     pub status_mutating: &'static str,
     pub status_error: &'static str,
@@ -140,7 +137,7 @@ pub struct T {
 }
 
 static PT: T = T {
-    app_title: "MCP Hangar",
+    app_title: "MCP Console",
     col_num: "#",
     col_name: "Nome",
     col_scope: "Escopo",
@@ -173,11 +170,9 @@ static PT: T = T {
     menu_srv_connectors: "&Connectors da conta (claude.ai)…",
     menu_help: "Aj&uda",
     menu_help_site: "&Site do projeto (GitHub)",
-    menu_help_download: "&Baixar atualização",
-    menu_help_download_v: "&Baixar atualização %V…",
     menu_help_manual: "&Manual…",
-    menu_help_about: "So&bre o MCP Hangar…",
-    manual_title: "Manual — MCP Hangar",
+    menu_help_about: "So&bre o MCP Console…",
+    manual_title: "Manual — MCP Console",
     manual_nav_scopes: "Escopos",
     manual_nav_types: "Tipos",
     manual_close: "Fechar",
@@ -194,7 +189,7 @@ São os servidores configurados no site claude.ai (Configurações › Conectore
 
 !! Atenção: se a conta é compartilhada com outras pessoas (por exemplo, uma conta de equipe), todo mundo que usa essa conta enxerga e usa esses servidores.
 
-O MCP Hangar apenas LISTA os conectores da conta — para criar ou remover, use o site (menu Servidores › Connectors da conta).
+O MCP Console apenas LISTA os conectores da conta — para criar ou remover, use o site (menu Servidores › Connectors da conta).
 
 ## Usuário
 
@@ -224,7 +219,7 @@ Servidor que veio junto com um plugin do Claude Code instalado nesta máquina. Q
 
 ## Desconhecido
 
-O CLI do Claude listou o servidor, mas o MCP Hangar não encontrou o arquivo de configuração que o define. Normalmente é algo configurado de forma não convencional.
+O CLI do Claude listou o servidor, mas o MCP Console não encontrou o arquivo de configuração que o define. Normalmente é algo configurado de forma não convencional.
 
 ## Resumo rápido
 
@@ -279,9 +274,9 @@ Variáveis de ambiente (CHAVE=VALOR) valem principalmente para servidores stdio:
 
 Cabeçalhos HTTP (Chave: Valor) valem para HTTP e SSE: acompanham cada chamada à URL, normalmente para autenticação.
 
-Nos dois casos, o MCP Hangar nunca mostra os valores na listagem — só os nomes.",
-    about_title: "Sobre o MCP Hangar",
-    about_body: "MCP Hangar %V\r\nGerenciador de servidores MCP do Claude Code.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nLicença MIT — Software Imperial",
+Nos dois casos, o MCP Console nunca mostra os valores na listagem — só os nomes.",
+    about_title: "Sobre o MCP Console",
+    about_body: "MCP Console %V\r\nGerenciador de servidores MCP do Claude Code.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nLicença MIT — Software Imperial",
     pref_title: "Preferências",
     pref_section_interface: "Interface",
     pref_hint: "A alteração é aplicada imediatamente.",
@@ -289,7 +284,6 @@ Nos dois casos, o MCP Hangar nunca mostra os valores na listagem — só os nome
     lang_label: "Idioma:",
     status_left_ready: "Pronto",
     status_servers: "%N servidores",
-    status_update: "Atualização %V disponível",
     status_cli_running: "Consultando o Claude Code (claude mcp list)…",
     status_mutating: "Aplicando alteração via claude CLI…",
     status_error: "Erro: %E",
@@ -307,10 +301,10 @@ Nos dois casos, o MCP Hangar nunca mostra os valores na listagem — só os nome
     detail_reach_repo: "Nível de PROJETO: definido em .mcp.json e compartilhado com quem usa o repositório (via git). Não sincroniza pela conta claude.ai.",
     detail_reach_unknown: "Origem não identificada — listado pelo CLI, mas não encontrado nos arquivos de configuração conhecidos.",
     confirm_remove_title: "Remover servidor",
-    confirm_remove_body: "Remover \"%S\"? Um backup da configuração será salvo em ~\\.claude\\backups\\mcp-hangar antes.",
+    confirm_remove_body: "Remover \"%S\"? Um backup da configuração será salvo em ~\\.claude\\backups\\mcp-console antes.",
     op_done: "Alteração aplicada.",
     op_error_title: "Falha na operação",
-    replace_removed_warning: "Atenção: a entrada original já tinha sido removida antes da falha — ela não existe mais. Backup da configuração em ~\\.claude\\backups\\mcp-hangar.",
+    replace_removed_warning: "Atenção: a entrada original já tinha sido removida antes da falha — ela não existe mais. Backup da configuração em ~\\.claude\\backups\\mcp-console.",
     dlg_title_add: "Adicionar servidor MCP",
     dlg_title_edit: "Editar servidor MCP",
     dlg_step_identity: "1 · Identificação",
@@ -351,7 +345,7 @@ Nos dois casos, o MCP Hangar nunca mostra os valores na listagem — só os nome
     dlg_sum_remote: "O Claude vai conectar em: %T",
     dlg_sum_remote_notarget: "Falta informar a URL do servidor.",
     dlg_sum_env: "Variáveis de ambiente: %N.",
-    dlg_backup_note: "Antes de qualquer alteração, um backup automático da configuração é salvo em ~\\.claude\\backups\\mcp-hangar.",
+    dlg_backup_note: "Antes de qualquer alteração, um backup automático da configuração é salvo em ~\\.claude\\backups\\mcp-console.",
     dlg_back: "< Voltar",
     dlg_next: "Avançar >",
     dlg_ok: "Salvar",
@@ -368,7 +362,7 @@ Nos dois casos, o MCP Hangar nunca mostra os valores na listagem — só os nome
 };
 
 static EN: T = T {
-    app_title: "MCP Hangar",
+    app_title: "MCP Console",
     col_num: "#",
     col_name: "Name",
     col_scope: "Scope",
@@ -401,11 +395,9 @@ static EN: T = T {
     menu_srv_connectors: "Account &connectors (claude.ai)…",
     menu_help: "&Help",
     menu_help_site: "Project &site (GitHub)",
-    menu_help_download: "&Download update",
-    menu_help_download_v: "&Download update %V…",
     menu_help_manual: "&Manual…",
-    menu_help_about: "&About MCP Hangar…",
-    manual_title: "MCP Hangar Manual",
+    menu_help_about: "&About MCP Console…",
+    manual_title: "MCP Console Manual",
     manual_nav_scopes: "Scopes",
     manual_nav_types: "Types",
     manual_close: "Close",
@@ -422,7 +414,7 @@ Servers configured on the claude.ai website (Settings › Connectors). They belo
 
 !! Careful: if the account is shared with other people (a team account, for example), everyone using that account sees and uses these servers.
 
-MCP Hangar only LISTS account connectors — to create or remove them, use the website (Servers › Account connectors menu).
+MCP Console only LISTS account connectors — to create or remove them, use the website (Servers › Account connectors menu).
 
 ## User
 
@@ -452,7 +444,7 @@ A server that came bundled with a Claude Code plugin installed on this machine. 
 
 ## Unknown
 
-The Claude CLI listed the server, but MCP Hangar could not find the configuration file that defines it. Usually something configured in an unconventional way.
+The Claude CLI listed the server, but MCP Console could not find the configuration file that defines it. Usually something configured in an unconventional way.
 
 ## Quick recap
 
@@ -507,9 +499,9 @@ Environment variables (KEY=VALUE) matter mostly for stdio servers: the program r
 
 HTTP headers (Key: Value) matter for HTTP and SSE: they travel with every call to the URL, usually for authentication.
 
-In both cases, MCP Hangar never shows the values in the listing — only the names.",
-    about_title: "About MCP Hangar",
-    about_body: "MCP Hangar %V\r\nClaude Code MCP server manager.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nMIT License — Software Imperial",
+In both cases, MCP Console never shows the values in the listing — only the names.",
+    about_title: "About MCP Console",
+    about_body: "MCP Console %V\r\nClaude Code MCP server manager.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nMIT License — Software Imperial",
     pref_title: "Preferences",
     pref_section_interface: "Interface",
     pref_hint: "The change is applied immediately.",
@@ -517,7 +509,6 @@ In both cases, MCP Hangar never shows the values in the listing — only the nam
     lang_label: "Language:",
     status_left_ready: "Ready",
     status_servers: "%N servers",
-    status_update: "Update %V available",
     status_cli_running: "Querying Claude Code (claude mcp list)…",
     status_mutating: "Applying change via claude CLI…",
     status_error: "Error: %E",
@@ -535,10 +526,10 @@ In both cases, MCP Hangar never shows the values in the listing — only the nam
     detail_reach_repo: "PROJECT level: defined in .mcp.json and shared with everyone using the repository (via git). It does not sync through the claude.ai account.",
     detail_reach_unknown: "Unidentified origin — listed by the CLI but not found in any known configuration file.",
     confirm_remove_title: "Remove server",
-    confirm_remove_body: "Remove \"%S\"? A configuration backup will be saved to ~\\.claude\\backups\\mcp-hangar first.",
+    confirm_remove_body: "Remove \"%S\"? A configuration backup will be saved to ~\\.claude\\backups\\mcp-console first.",
     op_done: "Change applied.",
     op_error_title: "Operation failed",
-    replace_removed_warning: "Warning: the original entry had already been removed before the failure — it no longer exists. Configuration backup at ~\\.claude\\backups\\mcp-hangar.",
+    replace_removed_warning: "Warning: the original entry had already been removed before the failure — it no longer exists. Configuration backup at ~\\.claude\\backups\\mcp-console.",
     dlg_title_add: "Add MCP server",
     dlg_title_edit: "Edit MCP server",
     dlg_step_identity: "1 · Identity",
@@ -579,7 +570,7 @@ In both cases, MCP Hangar never shows the values in the listing — only the nam
     dlg_sum_remote: "Claude will connect to: %T",
     dlg_sum_remote_notarget: "The server URL is still missing.",
     dlg_sum_env: "Environment variables: %N.",
-    dlg_backup_note: "Before any change, an automatic configuration backup is saved to ~\\.claude\\backups\\mcp-hangar.",
+    dlg_backup_note: "Before any change, an automatic configuration backup is saved to ~\\.claude\\backups\\mcp-console.",
     dlg_back: "< Back",
     dlg_next: "Next >",
     dlg_ok: "Save",

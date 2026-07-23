@@ -21,7 +21,7 @@ pub struct ServerDraft {
 
 fn backups_root() -> PathBuf {
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".claude").join("backups").join("mcp-hangar")
+    PathBuf::from(home).join(".claude").join("backups").join("mcp-console")
 }
 
 /// Copies ~/.claude.json (and the project's .mcp.json for project scope) into a

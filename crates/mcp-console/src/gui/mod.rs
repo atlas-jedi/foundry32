@@ -10,7 +10,6 @@ use crate::i18n::{t, Lang, T};
 use crate::model::{McpServer, Scope, Transport};
 use crate::mutation::{self, ServerDraft};
 use crate::settings::AppSettings;
-use crate::update_check::{self, UpdateInfo};
 use foundry_common::theme::{apply_explorer_theme, create_glyph_icon};
 use foundry_common::ui::{insert_report_list_view_column, set_menu_item_text, set_submenu_text};
 use native_windows_gui as nwg;
@@ -26,6 +25,9 @@ pub(crate) use foundry_common::theme::apply_classic_button_theme;
 const CONNECTORS_URL: &str = "https://claude.ai/settings/connectors";
 const REPO_URL: &str = "https://github.com/atlas-jedi/mcp-hangar";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// This tool's own version, shown in the status bar and About box. Update
+/// checking itself is owned by the Foundry32 hub, not by the tool.
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Layout metrics in logical pixels (nwg setters apply the DPI scale).
 const MARGIN: i32 = 8;
@@ -36,7 +38,6 @@ const GROUP_GAP: i32 = 18;
 const DETAILS_W: i32 = 330;
 const STATUS_SERVERS_W: i32 = 130;
 const STATUS_VERSION_W: i32 = 90;
-const STATUS_UPDATE_W: i32 = 230;
 const VK_F5: u32 = 0x74;
 
 /// Segoe MDL2 Assets glyphs (the system icon font on Windows 10/11).
@@ -68,12 +69,11 @@ pub(crate) struct MutationFailure {
     pub original_removed: bool,
 }
 
-/// Mailbox written by worker threads (CLI listing, update check, mutations,
-/// dialog outcomes), drained on the UI thread when the Notice fires.
+/// Mailbox written by worker threads (CLI listing, mutations, dialog outcomes),
+/// drained on the UI thread when the Notice fires.
 #[derive(Default)]
 pub(crate) struct Shared {
     pub cli: Option<Result<Vec<CliListEntry>, String>>,
-    pub update: Option<Result<Option<UpdateInfo>, String>>,
     pub mutation: Option<Result<(), MutationFailure>>,
     pub dialog: Option<Option<ServerDraft>>,
     pub preferences: Option<Option<Lang>>,
@@ -94,11 +94,9 @@ struct UiState {
     mutating: bool,
     selected_row: Option<usize>,
     editing: Option<(String, Scope)>,
-    update_url: Option<String>,
-    update_version: Option<String>,
 }
 
-pub struct HangarApp {
+pub struct ConsoleApp {
     window: nwg::Window,
     listview: nwg::ListView,
     details: nwg::TextBox,
@@ -117,7 +115,6 @@ pub struct HangarApp {
     mi_connectors: nwg::MenuItem,
     menu_help: nwg::Menu,
     mi_site: nwg::MenuItem,
-    mi_download: nwg::MenuItem,
     mi_manual: nwg::MenuItem,
     mi_about: nwg::MenuItem,
     _menu_seps: Vec<nwg::MenuSeparator>,
@@ -137,11 +134,10 @@ pub fn run() {
     app.layout();
     app.set_version_text();
     app.refresh();
-    app.spawn_update_check();
     nwg::dispatch_thread_events();
 }
 
-fn build_app(settings: AppSettings) -> HangarApp {
+fn build_app(settings: AppSettings) -> ConsoleApp {
     let lang = settings.lang;
     let tr = t(lang);
 
@@ -187,7 +183,6 @@ fn build_app(settings: AppSettings) -> HangarApp {
 
     let menu_help = menu(tr.menu_help, &window);
     let mi_site = item(tr.menu_help_site, &menu_help);
-    let mi_download = item(tr.menu_help_download, &menu_help);
     separator(&menu_help);
     let mi_manual = item(tr.menu_help_manual, &menu_help);
     let mi_about = item(tr.menu_help_about, &menu_help);
@@ -242,13 +237,12 @@ fn build_app(settings: AppSettings) -> HangarApp {
         }
     }
 
-    mi_download.set_enabled(false);
     mi_edit.set_enabled(false);
     mi_remove.set_enabled(false);
     btn_edit.set_enabled(false);
     btn_remove.set_enabled(false);
 
-    HangarApp {
+    ConsoleApp {
         window,
         listview,
         details,
@@ -267,7 +261,6 @@ fn build_app(settings: AppSettings) -> HangarApp {
         mi_connectors,
         menu_help,
         mi_site,
-        mi_download,
         mi_manual,
         mi_about,
         _menu_seps: menu_seps,
@@ -282,14 +275,12 @@ fn build_app(settings: AppSettings) -> HangarApp {
             mutating: false,
             selected_row: None,
             editing: None,
-            update_url: None,
-            update_version: None,
         }),
         shared: Arc::new(Mutex::new(Shared::default())),
     }
 }
 
-fn wire_events(app: &Rc<HangarApp>) {
+fn wire_events(app: &Rc<ConsoleApp>) {
     let evt_app = Rc::downgrade(app);
     let handler = nwg::full_bind_event_handler(&app.window.handle, move |evt, evt_data, handle| {
         let Some(app) = evt_app.upgrade() else { return };
@@ -327,11 +318,6 @@ fn wire_events(app: &Rc<HangarApp>) {
                     app.open_preferences();
                 } else if handle == app.mi_site.handle {
                     open_in_browser(REPO_URL);
-                } else if handle == app.mi_download.handle {
-                    let url = app.state.borrow().update_url.clone();
-                    if let Some(url) = url {
-                        open_in_browser(&url);
-                    }
                 } else if handle == app.mi_manual.handle {
                     app.open_manual();
                 } else if handle == app.mi_about.handle {
@@ -360,7 +346,7 @@ fn wire_events(app: &Rc<HangarApp>) {
     std::mem::forget(handler);
 }
 
-impl HangarApp {
+impl ConsoleApp {
     fn tr(&self) -> &'static T {
         t(self.state.borrow().lang)
     }
@@ -416,11 +402,7 @@ impl HangarApp {
         let scale = nwg::scale_factor();
         let px = |v: i32| (v as f64 * scale) as i32;
         let width = px(self.window.size().0 as i32);
-        let right_w = if self.state.borrow().update_version.is_some() {
-            px(STATUS_UPDATE_W)
-        } else {
-            px(STATUS_VERSION_W)
-        };
+        let right_w = px(STATUS_VERSION_W);
         let edges = [width - px(STATUS_SERVERS_W) - right_w, width - right_w, -1i32];
         unsafe {
             SendMessageW(hwnd, SB_SETPARTS, edges.len(), edges.as_ptr() as isize);
@@ -466,16 +448,6 @@ impl HangarApp {
         });
     }
 
-    fn spawn_update_check(&self) {
-        let shared = Arc::clone(&self.shared);
-        let sender = self.notice.sender();
-        std::thread::spawn(move || {
-            let result = update_check::check_for_update();
-            shared.lock().unwrap().update = Some(result);
-            sender.notice();
-        });
-    }
-
     fn spawn_mutation(&self, op: MutationOp) {
         let claude = {
             let state = self.state.borrow();
@@ -516,11 +488,10 @@ impl HangarApp {
     }
 
     fn drain_shared(&self) {
-        let (cli, update, mutation_result, dialog, preferences, manual) = {
+        let (cli, mutation_result, dialog, preferences, manual) = {
             let mut shared = self.shared.lock().unwrap();
             (
                 shared.cli.take(),
-                shared.update.take(),
                 shared.mutation.take(),
                 shared.dialog.take(),
                 shared.preferences.take(),
@@ -540,10 +511,6 @@ impl HangarApp {
                     self.set_ready_status();
                 }
             }
-        }
-
-        if let Some(Ok(Some(info))) = update {
-            self.apply_update_available(info);
         }
 
         if let Some(result) = mutation_result {
@@ -598,18 +565,6 @@ impl HangarApp {
                 }
             }
         }
-    }
-
-    fn apply_update_available(&self, info: UpdateInfo) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.update_url = Some(info.html_url);
-            state.update_version = Some(info.latest_version);
-        }
-        self.set_status_parts();
-        self.set_version_text();
-        self.relabel_download_item();
-        self.mi_download.set_enabled(true);
     }
 
     fn populate_list(&self) {
@@ -734,7 +689,7 @@ impl HangarApp {
 
     fn show_about(&self) {
         let tr = self.tr();
-        let body = tr.about_body.replace("%V", update_check::CURRENT_VERSION);
+        let body = tr.about_body.replace("%V", CURRENT_VERSION);
         nwg::modal_info_message(&self.window.handle, tr.about_title, &body);
     }
 
@@ -774,7 +729,6 @@ impl HangarApp {
         set_menu_item_text(&self.mi_site, tr.menu_help_site);
         set_menu_item_text(&self.mi_manual, tr.menu_help_manual);
         set_menu_item_text(&self.mi_about, tr.menu_help_about);
-        self.relabel_download_item();
         self.redraw_menu_bar();
     }
 
@@ -784,15 +738,6 @@ impl HangarApp {
         if let Some(hwnd) = self.window.handle.hwnd() {
             unsafe { winapi::um::winuser::DrawMenuBar(hwnd) };
         }
-    }
-
-    fn relabel_download_item(&self) {
-        let tr = self.tr();
-        let label = match &self.state.borrow().update_version {
-            Some(version) => tr.menu_help_download_v.replace("%V", version),
-            None => tr.menu_help_download.to_string(),
-        };
-        set_menu_item_text(&self.mi_download, &label);
     }
 
     fn set_action_buttons_enabled(&self, enabled: bool) {
@@ -842,11 +787,7 @@ impl HangarApp {
     }
 
     fn set_version_text(&self) {
-        let text = match &self.state.borrow().update_version {
-            Some(version) => self.tr().status_update.replace("%V", version),
-            None => format!("v{}", update_check::CURRENT_VERSION),
-        };
-        self.status_bar.set_text(2, &text);
+        self.status_bar.set_text(2, &format!("v{CURRENT_VERSION}"));
     }
 }
 
