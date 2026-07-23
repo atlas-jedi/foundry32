@@ -11,7 +11,7 @@ use std::fs;
 /// always consistent with that release's tool binaries (and dodges the raw-CDN
 /// staleness window). Override with `FOUNDRY32_REGISTRY_URL` for development.
 const RELEASE_ASSET_URL: &str =
-    "https://github.com/atlas-jedi/mcp-hangar/releases/latest/download/registry.json";
+    "https://github.com/atlas-jedi/foundry32/releases/latest/download/registry.json";
 
 /// Embedded copy — offline / first-run fallback, regenerated at release time.
 const EMBEDDED: &str = include_str!("../../../registry.json");

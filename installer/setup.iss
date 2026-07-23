@@ -9,7 +9,7 @@
 #endif
 #define MyAppName "Foundry32"
 #define MyAppPublisher "Software Imperial"
-#define MyAppURL "https://github.com/atlas-jedi/mcp-hangar"
+#define MyAppURL "https://github.com/atlas-jedi/foundry32"
 #define MyAppExeName "foundry32.exe"
 
 [Setup]

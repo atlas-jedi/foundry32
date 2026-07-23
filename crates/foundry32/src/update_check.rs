@@ -3,8 +3,8 @@
 //! installs — it only compares the newest GitHub release with this version.
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const RELEASES_URL: &str = "https://github.com/atlas-jedi/mcp-hangar/releases/latest";
-const LATEST_API: &str = "https://api.github.com/repos/atlas-jedi/mcp-hangar/releases/latest";
+pub const RELEASES_URL: &str = "https://github.com/atlas-jedi/foundry32/releases/latest";
+const LATEST_API: &str = "https://api.github.com/repos/atlas-jedi/foundry32/releases/latest";
 
 pub struct UpdateInfo {
     pub latest_version: String,

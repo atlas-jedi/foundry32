@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const REPO_URL: &str = "https://github.com/atlas-jedi/mcp-hangar";
+const REPO_URL: &str = "https://github.com/atlas-jedi/foundry32";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 

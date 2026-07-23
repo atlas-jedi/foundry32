@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) use foundry_common::theme::apply_classic_button_theme;
 
 const CONNECTORS_URL: &str = "https://claude.ai/settings/connectors";
-const REPO_URL: &str = "https://github.com/atlas-jedi/mcp-hangar";
+const REPO_URL: &str = "https://github.com/atlas-jedi/foundry32";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// This tool's own version, shown in the status bar and About box. Update
 /// checking itself is owned by the Foundry32 hub, not by the tool.

@@ -276,7 +276,7 @@ Cabeçalhos HTTP (Chave: Valor) valem para HTTP e SSE: acompanham cada chamada �
 
 Nos dois casos, o MCP Console nunca mostra os valores na listagem — só os nomes.",
     about_title: "Sobre o MCP Console",
-    about_body: "MCP Console %V\r\nGerenciador de servidores MCP do Claude Code.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nLicença MIT — Software Imperial",
+    about_body: "MCP Console %V\r\nGerenciador de servidores MCP do Claude Code.\r\n\r\ngithub.com/atlas-jedi/foundry32\r\nLicença MIT — Software Imperial",
     pref_title: "Preferências",
     pref_section_interface: "Interface",
     pref_hint: "A alteração é aplicada imediatamente.",
@@ -501,7 +501,7 @@ HTTP headers (Key: Value) matter for HTTP and SSE: they travel with every call t
 
 In both cases, MCP Console never shows the values in the listing — only the names.",
     about_title: "About MCP Console",
-    about_body: "MCP Console %V\r\nClaude Code MCP server manager.\r\n\r\ngithub.com/atlas-jedi/mcp-hangar\r\nMIT License — Software Imperial",
+    about_body: "MCP Console %V\r\nClaude Code MCP server manager.\r\n\r\ngithub.com/atlas-jedi/foundry32\r\nMIT License — Software Imperial",
     pref_title: "Preferences",
     pref_section_interface: "Interface",
     pref_hint: "The change is applied immediately.",

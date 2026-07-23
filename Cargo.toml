@@ -8,7 +8,7 @@ members = ["crates/foundry-common", "crates/foundry32", "crates/mcp-console"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/atlas-jedi/mcp-hangar"
+repository = "https://github.com/atlas-jedi/foundry32"
 
 # Size-optimized release profile. Workspace-level profiles apply to every
 # member; per-crate `[profile.*]` sections are ignored, so this must live here.

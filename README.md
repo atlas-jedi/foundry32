@@ -1,7 +1,7 @@
 # Foundry32
 
-[![CI](https://github.com/atlas-jedi/mcp-hangar/actions/workflows/ci.yml/badge.svg)](https://github.com/atlas-jedi/mcp-hangar/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/atlas-jedi/mcp-hangar)](https://github.com/atlas-jedi/mcp-hangar/releases/latest)
+[![CI](https://github.com/atlas-jedi/foundry32/actions/workflows/ci.yml/badge.svg)](https://github.com/atlas-jedi/foundry32/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/atlas-jedi/foundry32)](https://github.com/atlas-jedi/foundry32/releases/latest)
 
 **Português:** [README.pt-BR.md](README.pt-BR.md)
 
@@ -38,7 +38,7 @@ a new Foundry32 build.
 ## Install
 
 Download `Foundry32-Setup-<version>-x86.exe` from the
-[latest release](https://github.com/atlas-jedi/mcp-hangar/releases/latest) and
+[latest release](https://github.com/atlas-jedi/foundry32/releases/latest) and
 run the wizard. Default folder:
 `C:\Program Files (x86)\Software Imperial\Foundry32`. A portable zip is also
 attached to each release.
