@@ -2,7 +2,7 @@
 # installs; the repo tag `v*` tracks this crate's version.
 [package]
 name = "foundry32"
-version = "1.0.0"
+version = "2.0.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -1,7 +1,10 @@
-//! Main hub window. Windows-Classic chrome — classic 3D buttons, sunken-edged
-//! catalog and details panels under section labels, a classic segmented
-//! progress bar — with modern accents (colored status glyphs, Explorer list
-//! hover, DPI awareness, threaded install with live progress and cancel).
+//! Main hub window. A Windows-Classic card gallery: a welcome header with a
+//! "check for updates" action, then tools laid out as raised 3D panels grouped
+//! into "Installed" and "Discover more" sections. Each card is self-contained —
+//! a colored glyph icon, name, version, description, a status chip, an "Open"/
+//! "Install" primary button and a "…" overflow menu — over a classic bevel
+//! drawn by owner-draw (DrawEdge). Modern accents: colored status glyphs,
+//! DPI awareness, threaded install with live progress and cancel.
 
 pub mod preferences_dialog;
 
@@ -12,28 +15,37 @@ use crate::registry::{self, Catalog, Source};
 use crate::settings::AppSettings;
 use crate::update_check::{self, UpdateInfo};
 use crate::{download, engine, paths};
-use foundry_common::theme::{apply_classic_button_theme, apply_classic_theme, apply_explorer_theme, create_glyph_icon};
-use foundry_common::ui::{insert_report_list_view_column, set_menu_item_text, set_submenu_text};
+use foundry_common::theme::{apply_classic_button_theme, apply_classic_theme, create_glyph_icon};
+use foundry_common::ui::{set_menu_item_text, set_submenu_text};
 use native_windows_gui as nwg;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use winapi::shared::windef::{HICON, HWND};
 
 const REPO_URL: &str = "https://github.com/atlas-jedi/foundry32";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Layout metrics in logical pixels (nwg setters apply the DPI scale).
-const MARGIN: i32 = 10;
-const HEADER_H: i32 = 18;
-const BUTTON_W: i32 = 104;
-const BUTTON_H: i32 = 26;
-const BUTTON_GAP: i32 = 6;
-const PROGRESS_H: i32 = 18;
-const DETAILS_W: i32 = 310;
+const MARGIN: i32 = 16;
+const CARD_W: i32 = 250;
+const CARD_H: i32 = 210;
+const CARD_GAP: i32 = 14;
+const CARD_PAD: i32 = 16;
+const ICON_SIZE: i32 = 48;
+const STATUS_ICON: i32 = 16;
+const BTN_H: i32 = 28;
+const MORE_W: i32 = 36;
+const CHECK_W: i32 = 172;
+const PROGRESS_H: i32 = 20;
+const BOTTOM_BTN_W: i32 = 104;
+const SECTION_H: i32 = 26;
+const DIVIDER_Y: i32 = MARGIN + 60;
 const STATUS_TOOLS_W: i32 = 120;
 const STATUS_VERSION_W: i32 = 80;
 const VK_F5: u32 = 0x74;
@@ -42,10 +54,37 @@ const VK_F5: u32 = 0x74;
 const GLYPH_CHECKMARK: u16 = 0xE73E;
 const GLYPH_WARNING: u16 = 0xE7BA;
 const GLYPH_ERROR: u16 = 0xE783;
+/// Per-card status glyphs.
+const GLYPH_INSTALLED: u16 = 0xE73E; // completed checkmark
+const GLYPH_UPDATE: u16 = 0xE777; // update available
+const GLYPH_AVAILABLE: u16 = 0xE896; // download
+const GLYPH_UNAVAILABLE: u16 = 0xE785; // lock
+/// Per-tool icon glyphs.
+const GLYPH_CONSOLE: u16 = 0xE756; // command prompt
+const GLYPH_TOOL: u16 = 0xE74C; // generic component
+
 /// Fluent state colors as (r, g, b).
 const COLOR_OK: (u8, u8, u8) = (0x10, 0x7C, 0x10);
 const COLOR_WARNING: (u8, u8, u8) = (0x9D, 0x5D, 0x00);
 const COLOR_ERROR: (u8, u8, u8) = (0xC4, 0x2B, 0x1C);
+const COLOR_ACCENT: (u8, u8, u8) = (0x2B, 0x57, 0x9A);
+const COLOR_TOOL_DEFAULT: (u8, u8, u8) = (0x40, 0x53, 0x6B);
+/// COLORREF text tints for muted / body copy.
+const TEXT_MUTED: u32 = rgb(0x66, 0x66, 0x66);
+const TEXT_BODY: u32 = rgb(0x3A, 0x3A, 0x3A);
+
+/// Popup ("…") command ids — returned synchronously by TrackPopupMenu.
+const CMD_DETAILS: usize = 1;
+const CMD_UPDATE: usize = 2;
+const CMD_UNINSTALL: usize = 3;
+const CMD_HOMEPAGE: usize = 4;
+/// Raw handler id for the window owner-draw / text-color hook (must be > 0xFFFF).
+const RAW_HANDLER_ID: usize = 0x1_0000;
+
+/// Packs (r, g, b) into a Win32 COLORREF (0x00BBGGRR).
+const fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
 
 #[derive(Clone, Copy)]
 enum StatusTone {
@@ -56,9 +95,9 @@ enum StatusTone {
 }
 
 struct StatusIcons {
-    ok: winapi::shared::windef::HICON,
-    warning: winapi::shared::windef::HICON,
-    error: winapi::shared::windef::HICON,
+    ok: HICON,
+    warning: HICON,
+    error: HICON,
 }
 
 pub(crate) struct ProgressMsg {
@@ -85,37 +124,88 @@ pub(crate) struct Shared {
     pub preferences: Option<Option<Lang>>,
 }
 
+/// What the owner-draw hook needs: card frame rects (logical px), the header
+/// divider y, and per-static text colors keyed by HWND.
+#[derive(Default)]
+struct PaintData {
+    cards: Vec<(i32, i32, i32, i32)>,
+    divider_y: i32,
+    text_colors: HashMap<isize, u32>,
+}
+
+#[derive(Clone, Copy)]
+enum CardKind {
+    Installed { update: bool },
+    Available { installable: bool },
+}
+
+/// The controls that make up one tool card. All are children of the main
+/// window (so their WM_COMMAND reaches the window handler); the classic bevel
+/// behind them is painted by the window owner-draw hook.
+struct Card {
+    view_index: usize,
+    kind: CardKind,
+    icon: nwg::ImageFrame,
+    name: nwg::Label,
+    version: nwg::Label,
+    desc: nwg::Label,
+    status_icon: nwg::ImageFrame,
+    status_text: nwg::Label,
+    btn_primary: nwg::Button,
+    btn_more: nwg::Button,
+    icon_hicon: HICON,
+    status_hicon: HICON,
+}
+
+impl Drop for Card {
+    fn drop(&mut self) {
+        use winapi::um::winuser::DestroyIcon;
+        unsafe {
+            if !self.icon_hicon.is_null() {
+                DestroyIcon(self.icon_hicon);
+            }
+            if !self.status_hicon.is_null() {
+                DestroyIcon(self.status_hicon);
+            }
+        }
+    }
+}
+
+enum CardButton {
+    Primary,
+    More,
+}
+
 struct UiState {
     lang: Lang,
     catalog: Catalog,
-    source: Source,
     views: Vec<ToolView>,
-    selected: Option<usize>,
     busy: bool,
     update_url: Option<String>,
 }
 
 pub struct HubApp {
     window: nwg::Window,
-    lbl_catalog: nwg::Label,
-    lbl_details: nwg::Label,
-    listview: nwg::ListView,
-    details: nwg::TextBox,
+    lbl_title: nwg::Label,
+    lbl_subtitle: nwg::Label,
+    btn_check: nwg::Button,
+    lbl_sec_installed: nwg::Label,
+    lbl_sec_available: nwg::Label,
+    lbl_sec_hint: nwg::Label,
+    // Header / section fonts are held only to keep their HFONTs alive for the
+    // fixed labels that use them (set once at build, never re-read).
+    #[allow(dead_code)]
+    font_title: nwg::Font,
+    #[allow(dead_code)]
+    font_section: nwg::Font,
+    font_name: nwg::Font,
+    font_small: nwg::Font,
     progress: nwg::ProgressBar,
-    btn_install: nwg::Button,
-    btn_run: nwg::Button,
-    btn_uninstall: nwg::Button,
-    btn_update: nwg::Button,
     btn_cancel: nwg::Button,
     menu_file: nwg::Menu,
     mi_refresh: nwg::MenuItem,
     mi_prefs: nwg::MenuItem,
     mi_exit: nwg::MenuItem,
-    menu_tools: nwg::Menu,
-    mi_install: nwg::MenuItem,
-    mi_run: nwg::MenuItem,
-    mi_uninstall: nwg::MenuItem,
-    mi_update: nwg::MenuItem,
     menu_help: nwg::Menu,
     mi_site: nwg::MenuItem,
     mi_about: nwg::MenuItem,
@@ -123,6 +213,8 @@ pub struct HubApp {
     status_bar: nwg::StatusBar,
     status_icons: StatusIcons,
     notice: nwg::Notice,
+    cards: RefCell<Vec<Card>>,
+    paint: Rc<RefCell<PaintData>>,
     state: RefCell<UiState>,
     shared: Arc<Mutex<Shared>>,
     cancel: Arc<AtomicBool>,
@@ -148,8 +240,8 @@ fn build_app(settings: AppSettings) -> HubApp {
 
     let mut window = nwg::Window::default();
     nwg::Window::builder()
-        .size((1040, 660))
-        .position((200, 110))
+        .size((1060, 700))
+        .position((180, 90))
         .title(tr.app_title)
         .flags(nwg::WindowFlags::MAIN_WINDOW | nwg::WindowFlags::VISIBLE | nwg::WindowFlags::RESIZABLE)
         .build(&mut window)
@@ -178,68 +270,48 @@ fn build_app(settings: AppSettings) -> HubApp {
     separator(&menu_file);
     let mi_exit = item(tr.menu_file_exit, &menu_file);
 
-    let menu_tools = menu(tr.menu_tools, &window);
-    let mi_install = item(tr.menu_tools_install, &menu_tools);
-    let mi_run = item(tr.menu_tools_run, &menu_tools);
-    let mi_uninstall = item(tr.menu_tools_uninstall, &menu_tools);
-    let mi_update = item(tr.menu_tools_update, &menu_tools);
-
     let menu_help = menu(tr.menu_help, &window);
     let mi_site = item(tr.menu_help_site, &menu_help);
     let mi_about = item(tr.menu_help_about, &menu_help);
+
+    let font = |size: u32, weight: u32| {
+        let mut f = nwg::Font::default();
+        let _ = nwg::Font::builder().family("Segoe UI").size(size).weight(weight).build(&mut f);
+        f
+    };
+    let font_title = font(24, 700);
+    let font_section = font(15, 700);
+    let font_name = font(14, 600);
+    let font_small = font(12, 400);
 
     let label = |text: &str, parent: &nwg::Window| {
         let mut control = nwg::Label::default();
         nwg::Label::builder().parent(parent).text(text).build(&mut control).expect("label");
         control
     };
-    let lbl_catalog = label(tr.group_catalog, &window);
-    let lbl_details = label(tr.group_details, &window);
+    let lbl_title = label(tr.header_title, &window);
+    let lbl_subtitle = label(tr.header_subtitle, &window);
+    let lbl_sec_installed = label(tr.sec_installed, &window);
+    let lbl_sec_available = label(tr.sec_available, &window);
+    let lbl_sec_hint = label(tr.sec_available_hint, &window);
+    lbl_title.set_font(Some(&font_title));
+    lbl_subtitle.set_font(Some(&font_small));
+    lbl_sec_installed.set_font(Some(&font_section));
+    lbl_sec_available.set_font(Some(&font_section));
+    lbl_sec_hint.set_font(Some(&font_small));
 
-    let mut listview = nwg::ListView::default();
-    nwg::ListView::builder()
-        .parent(&window)
-        .list_style(nwg::ListViewStyle::Detailed)
-        .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID)
-        .build(&mut listview)
-        .expect("listview");
-    listview.set_headers_enabled(true);
-    let widths = [34, 200, 90, 90, 160, 84];
-    let titles = [tr.col_num, tr.col_tool, tr.col_installed, tr.col_available, tr.col_status, tr.col_size];
-    for (i, (w, title)) in widths.iter().zip(titles.iter()).enumerate() {
-        insert_report_list_view_column(&listview, i as i32, *w, title);
-    }
-    apply_explorer_theme(&listview.handle);
-
-    let mut details = nwg::TextBox::default();
-    nwg::TextBox::builder()
-        .parent(&window)
-        .text(tr.details_placeholder)
-        .readonly(true)
-        .flags(nwg::TextBoxFlags::VISIBLE | nwg::TextBoxFlags::VSCROLL)
-        .build(&mut details)
-        .expect("details");
+    let mut btn_check = nwg::Button::default();
+    nwg::Button::builder().parent(&window).text(tr.btn_check_updates).build(&mut btn_check).expect("btn_check");
+    apply_classic_button_theme(&btn_check);
 
     let mut progress = nwg::ProgressBar::default();
-    nwg::ProgressBar::builder()
-        .parent(&window)
-        .range(0..100)
-        .build(&mut progress)
-        .expect("progress");
+    nwg::ProgressBar::builder().parent(&window).range(0..100).build(&mut progress).expect("progress");
     apply_classic_theme(&progress.handle); // classic segmented block style
     progress.set_visible(false);
 
-    let button = |text: &str, parent: &nwg::Window| {
-        let mut control = nwg::Button::default();
-        nwg::Button::builder().parent(parent).text(text).build(&mut control).expect("button");
-        apply_classic_button_theme(&control);
-        control
-    };
-    let btn_install = button(tr.btn_install, &window);
-    let btn_run = button(tr.btn_run, &window);
-    let btn_uninstall = button(tr.btn_uninstall, &window);
-    let btn_update = button(tr.btn_update, &window);
-    let btn_cancel = button(tr.btn_cancel, &window);
+    let mut btn_cancel = nwg::Button::default();
+    nwg::Button::builder().parent(&window).text(tr.btn_cancel).build(&mut btn_cancel).expect("btn_cancel");
+    apply_classic_button_theme(&btn_cancel);
     btn_cancel.set_visible(false);
 
     let mut status_bar = nwg::StatusBar::default();
@@ -254,36 +326,24 @@ fn build_app(settings: AppSettings) -> HubApp {
         }
     }
 
-    btn_install.set_enabled(false);
-    btn_run.set_enabled(false);
-    btn_uninstall.set_enabled(false);
-    btn_update.set_enabled(false);
-    mi_install.set_enabled(false);
-    mi_run.set_enabled(false);
-    mi_uninstall.set_enabled(false);
-    mi_update.set_enabled(false);
-
     HubApp {
         window,
-        lbl_catalog,
-        lbl_details,
-        listview,
-        details,
+        lbl_title,
+        lbl_subtitle,
+        btn_check,
+        lbl_sec_installed,
+        lbl_sec_available,
+        lbl_sec_hint,
+        font_title,
+        font_section,
+        font_name,
+        font_small,
         progress,
-        btn_install,
-        btn_run,
-        btn_uninstall,
-        btn_update,
         btn_cancel,
         menu_file,
         mi_refresh,
         mi_prefs,
         mi_exit,
-        menu_tools,
-        mi_install,
-        mi_run,
-        mi_uninstall,
-        mi_update,
         menu_help,
         mi_site,
         mi_about,
@@ -291,12 +351,12 @@ fn build_app(settings: AppSettings) -> HubApp {
         status_bar,
         status_icons: create_status_icons(),
         notice,
+        cards: RefCell::new(Vec::new()),
+        paint: Rc::new(RefCell::new(PaintData::default())),
         state: RefCell::new(UiState {
             lang,
             catalog: Catalog::default(),
-            source: Source::Embedded,
             views: Vec::new(),
-            selected: None,
             busy: false,
             update_url: None,
         }),
@@ -306,6 +366,35 @@ fn build_app(settings: AppSettings) -> HubApp {
 }
 
 fn wire_events(app: &Rc<HubApp>) {
+    // Owner-draw + text-color hook on the window (raised card bevels, muted /
+    // status-tinted static text). Kept for the lifetime of the process.
+    let paint = Rc::clone(&app.paint);
+    // RawEventHandler has no Drop, so dropping the Result leaves the subclass
+    // installed for the lifetime of the window.
+    let _ = nwg::bind_raw_event_handler(&app.window.handle, RAW_HANDLER_ID, move |hwnd, msg, w, l| {
+        use winapi::um::winuser::{GetSysColorBrush, COLOR_BTNFACE, WM_CTLCOLORSTATIC, WM_ERASEBKGND};
+        match msg {
+            WM_ERASEBKGND => {
+                unsafe { paint_background(hwnd, w as winapi::shared::windef::HDC, &paint.borrow()) };
+                Some(1)
+            }
+            WM_CTLCOLORSTATIC => {
+                let child = l;
+                let color = paint.borrow().text_colors.get(&child).copied();
+                color.map(|c| {
+                    use winapi::um::wingdi::{SetBkMode, SetTextColor, TRANSPARENT};
+                    let hdc = w as winapi::shared::windef::HDC;
+                    unsafe {
+                        SetTextColor(hdc, c);
+                        SetBkMode(hdc, TRANSPARENT as i32);
+                        GetSysColorBrush(COLOR_BTNFACE) as isize
+                    }
+                })
+            }
+            _ => None,
+        }
+    });
+
     let evt_app = Rc::downgrade(app);
     let handler = nwg::full_bind_event_handler(&app.window.handle, move |evt, evt_data, handle| {
         let Some(app) = evt_app.upgrade() else { return };
@@ -314,16 +403,15 @@ fn wire_events(app: &Rc<HubApp>) {
             E::OnWindowClose if handle == app.window.handle => nwg::stop_thread_dispatch(),
             E::OnResize | E::OnResizeEnd | E::OnWindowMaximize if handle == app.window.handle => app.layout(),
             E::OnButtonClick => {
-                if handle == app.btn_install.handle {
-                    app.do_install_or_update(false);
-                } else if handle == app.btn_update.handle {
-                    app.do_install_or_update(true);
-                } else if handle == app.btn_run.handle {
-                    app.do_run();
-                } else if handle == app.btn_uninstall.handle {
-                    app.do_uninstall();
+                if handle == app.btn_check.handle {
+                    app.on_check_updates();
                 } else if handle == app.btn_cancel.handle {
                     app.cancel.store(true, Ordering::Relaxed);
+                } else if let Some((index, which)) = app.locate_card_button(&handle) {
+                    match which {
+                        CardButton::Primary => app.card_primary(index),
+                        CardButton::More => app.card_more(index),
+                    }
                 }
             }
             E::OnMenuItemSelected => {
@@ -333,14 +421,6 @@ fn wire_events(app: &Rc<HubApp>) {
                     app.refresh();
                 } else if handle == app.mi_prefs.handle {
                     app.open_preferences();
-                } else if handle == app.mi_install.handle {
-                    app.do_install_or_update(false);
-                } else if handle == app.mi_update.handle {
-                    app.do_install_or_update(true);
-                } else if handle == app.mi_run.handle {
-                    app.do_run();
-                } else if handle == app.mi_uninstall.handle {
-                    app.do_uninstall();
                 } else if handle == app.mi_site.handle {
                     open_in_browser(REPO_URL);
                 } else if handle == app.mi_about.handle {
@@ -354,16 +434,43 @@ fn wire_events(app: &Rc<HubApp>) {
                     }
                 }
             }
-            E::OnListViewItemChanged | E::OnListViewClick if handle == app.listview.handle => {
-                if let nwg::EventData::OnListViewItemIndex { row_index, .. } = evt_data {
-                    app.select_row(row_index);
-                }
-            }
             E::OnNotice if handle == app.notice.handle => app.drain_shared(),
             _ => {}
         }
     });
     std::mem::forget(handler);
+}
+
+/// Paints the window background: flat classic face, a raised bevel around each
+/// card rect, and an etched divider under the header. Runs on WM_ERASEBKGND so
+/// child controls paint on top.
+unsafe fn paint_background(hwnd: HWND, hdc: winapi::shared::windef::HDC, paint: &PaintData) {
+    use winapi::shared::windef::RECT;
+    use winapi::um::winuser::{
+        DrawEdge, FillRect, GetClientRect, GetSysColorBrush, BF_RECT, BF_TOP, COLOR_BTNFACE, EDGE_ETCHED, EDGE_RAISED,
+    };
+
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(hwnd, &mut client);
+    FillRect(hdc, &client, GetSysColorBrush(COLOR_BTNFACE));
+
+    let scale = nwg::scale_factor();
+    let dev = |v: i32| (v as f64 * scale) as i32;
+
+    for &(x, y, w, h) in &paint.cards {
+        let mut r = RECT { left: dev(x), top: dev(y), right: dev(x + w), bottom: dev(y + h) };
+        DrawEdge(hdc, &mut r, EDGE_RAISED, BF_RECT);
+    }
+
+    if paint.divider_y > 0 {
+        let mut r = RECT {
+            left: dev(MARGIN),
+            top: dev(paint.divider_y),
+            right: client.right - dev(MARGIN),
+            bottom: dev(paint.divider_y) + 2,
+        };
+        DrawEdge(hdc, &mut r, EDGE_ETCHED, BF_TOP);
+    }
 }
 
 impl HubApp {
@@ -374,42 +481,142 @@ impl HubApp {
     fn layout(&self) {
         let (width, height) = self.window.size();
         let (width, height) = (width as i32, height as i32);
-        if width < 360 || height < 260 {
+        if width < 420 || height < 320 {
             return;
         }
         let status_h = self.status_bar_height();
-        let button_y = height - status_h - BUTTON_H - MARGIN;
-        let progress_y = button_y - PROGRESS_H - 6;
-        let content_top = MARGIN + HEADER_H;
-        let content_h = (progress_y - MARGIN - content_top).max(80) as u32;
-        let details_w = DETAILS_W.min(width / 3);
-        let details_x = width - MARGIN - details_w;
-        let list_w = (details_x - 2 * MARGIN).max(140) as u32;
 
-        self.lbl_catalog.set_position(MARGIN, MARGIN);
-        self.lbl_catalog.set_size(list_w, HEADER_H as u32);
-        self.listview.set_position(MARGIN, content_top);
-        self.listview.set_size(list_w, content_h);
+        // Header row: title + subtitle on the left, check-updates on the right.
+        self.lbl_title.set_position(MARGIN, MARGIN);
+        self.lbl_title.set_size((width - 2 * MARGIN - CHECK_W - 8).max(80) as u32, 30);
+        self.lbl_subtitle.set_position(MARGIN, MARGIN + 34);
+        self.lbl_subtitle.set_size((width - 2 * MARGIN).max(80) as u32, 20);
+        self.btn_check.set_position(width - MARGIN - CHECK_W, MARGIN + 2);
+        self.btn_check.set_size(CHECK_W as u32, BTN_H as u32);
 
-        self.lbl_details.set_position(details_x, MARGIN);
-        self.lbl_details.set_size(details_w as u32, HEADER_H as u32);
-        self.details.set_position(details_x, content_top);
-        self.details.set_size(details_w as u32, content_h);
-
-        // Progress bar spans the content width, just above the button row.
-        self.progress.set_position(MARGIN, progress_y);
-        self.progress.set_size((width - 2 * MARGIN) as u32, PROGRESS_H as u32);
-
-        let mut x = MARGIN;
-        for button in [&self.btn_install, &self.btn_run, &self.btn_uninstall, &self.btn_update] {
-            button.set_position(x, button_y);
-            button.set_size(BUTTON_W as u32, BUTTON_H as u32);
-            x += BUTTON_W + BUTTON_GAP;
+        // Bottom band: progress + cancel while an operation runs.
+        let busy = self.state.borrow().busy;
+        if busy {
+            let band_y = height - status_h - MARGIN - BTN_H;
+            self.progress.set_position(MARGIN, band_y + (BTN_H - PROGRESS_H) / 2);
+            self.progress.set_size((width - 2 * MARGIN - BOTTOM_BTN_W - 8).max(60) as u32, PROGRESS_H as u32);
+            self.btn_cancel.set_position(width - MARGIN - BOTTOM_BTN_W, band_y);
+            self.btn_cancel.set_size(BOTTOM_BTN_W as u32, BTN_H as u32);
         }
-        self.btn_cancel.set_position(width - MARGIN - BUTTON_W, button_y);
-        self.btn_cancel.set_size(BUTTON_W as u32, BUTTON_H as u32);
 
+        // Card grid, installed section first.
+        let columns = ((width - 2 * MARGIN + CARD_GAP) / (CARD_W + CARD_GAP)).max(1);
+        let cards = self.cards.borrow();
+        let n_installed = cards.iter().filter(|c| matches!(c.kind, CardKind::Installed { .. })).count();
+        let mut rects = Vec::with_capacity(cards.len());
+        let mut y = DIVIDER_Y + 14;
+
+        if n_installed > 0 {
+            self.lbl_sec_installed.set_visible(true);
+            self.lbl_sec_installed.set_position(MARGIN, y);
+            self.lbl_sec_installed.set_size((width - 2 * MARGIN).max(80) as u32, 22);
+            y += SECTION_H;
+            y = self.place_grid(&cards[..n_installed], y, columns, &mut rects) + 12;
+        } else {
+            self.lbl_sec_installed.set_visible(false);
+        }
+
+        if cards.len() > n_installed {
+            self.lbl_sec_available.set_visible(true);
+            self.lbl_sec_hint.set_visible(true);
+            self.lbl_sec_available.set_position(MARGIN, y);
+            self.lbl_sec_available.set_size((width - 2 * MARGIN).max(80) as u32, 22);
+            self.lbl_sec_hint.set_position(MARGIN, y + 22);
+            self.lbl_sec_hint.set_size((width - 2 * MARGIN).max(80) as u32, 18);
+            y += SECTION_H + 20;
+            self.place_grid(&cards[n_installed..], y, columns, &mut rects);
+        } else {
+            self.lbl_sec_available.set_visible(false);
+            self.lbl_sec_hint.set_visible(false);
+        }
+        drop(cards);
+
+        {
+            let mut paint = self.paint.borrow_mut();
+            paint.cards = rects;
+            paint.divider_y = DIVIDER_Y;
+            paint.text_colors = self.compute_text_colors();
+        }
         self.set_status_parts();
+        self.invalidate();
+    }
+
+    /// Positions the inner controls of every card in `slice` into a wrapping
+    /// grid starting at `y0`, recording each frame rect. Returns the y just
+    /// below the last row.
+    fn place_grid(&self, slice: &[Card], y0: i32, columns: i32, rects: &mut Vec<(i32, i32, i32, i32)>) -> i32 {
+        let mut max_y = y0;
+        for (k, card) in slice.iter().enumerate() {
+            let col = (k as i32) % columns;
+            let row = (k as i32) / columns;
+            let cx = MARGIN + col * (CARD_W + CARD_GAP);
+            let cy = y0 + row * (CARD_H + CARD_GAP);
+            self.place_card(card, cx, cy);
+            rects.push((cx, cy, CARD_W, CARD_H));
+            max_y = max_y.max(cy + CARD_H);
+        }
+        max_y
+    }
+
+    fn place_card(&self, card: &Card, cx: i32, cy: i32) {
+        let ix = cx + CARD_PAD;
+        let inner_w = (CARD_W - 2 * CARD_PAD).max(40) as u32;
+
+        card.icon.set_position(ix, cy + 16);
+        card.icon.set_size(ICON_SIZE as u32, ICON_SIZE as u32);
+        card.name.set_position(ix, cy + 70);
+        card.name.set_size(inner_w, 20);
+        card.version.set_position(ix, cy + 92);
+        card.version.set_size(inner_w, 16);
+        card.desc.set_position(ix, cy + 112);
+        card.desc.set_size(inner_w, 34);
+        card.status_icon.set_position(ix, cy + 150);
+        card.status_icon.set_size(STATUS_ICON as u32, STATUS_ICON as u32);
+        card.status_text.set_position(ix + STATUS_ICON + 6, cy + 150);
+        card.status_text.set_size((inner_w as i32 - STATUS_ICON - 6).max(20) as u32, 18);
+
+        let btn_y = cy + CARD_H - 14 - BTN_H;
+        let more_x = cx + CARD_W - CARD_PAD - MORE_W;
+        card.btn_more.set_position(more_x, btn_y);
+        card.btn_more.set_size(MORE_W as u32, BTN_H as u32);
+        card.btn_primary.set_position(ix, btn_y);
+        card.btn_primary.set_size((more_x - 8 - ix).max(40) as u32, BTN_H as u32);
+    }
+
+    /// Rebuilds the per-static text color map from the current cards + header.
+    fn compute_text_colors(&self) -> HashMap<isize, u32> {
+        let mut map = HashMap::new();
+        let mut insert = |label: &nwg::Label, color: u32| {
+            if let Some(hwnd) = label.handle.hwnd() {
+                map.insert(hwnd as isize, color);
+            }
+        };
+        insert(&self.lbl_subtitle, TEXT_MUTED);
+        insert(&self.lbl_sec_hint, TEXT_MUTED);
+        for card in self.cards.borrow().iter() {
+            insert(&card.version, TEXT_MUTED);
+            insert(&card.desc, TEXT_BODY);
+            let tone = match card.kind {
+                CardKind::Installed { update: false } => rgb(COLOR_OK.0, COLOR_OK.1, COLOR_OK.2),
+                CardKind::Installed { update: true } => rgb(COLOR_WARNING.0, COLOR_WARNING.1, COLOR_WARNING.2),
+                CardKind::Available { installable: true } => rgb(COLOR_ACCENT.0, COLOR_ACCENT.1, COLOR_ACCENT.2),
+                CardKind::Available { installable: false } => TEXT_MUTED,
+            };
+            insert(&card.status_text, tone);
+        }
+        map
+    }
+
+    fn invalidate(&self) {
+        use winapi::um::winuser::InvalidateRect;
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+        }
     }
 
     fn status_bar_height(&self) -> i32 {
@@ -442,11 +649,22 @@ impl HubApp {
         self.spawn_fetch_catalog();
     }
 
-    fn spawn_fetch_catalog(&self) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.busy = true;
+    /// "Check for Updates": if a newer Foundry32 is already known, open its
+    /// release page; otherwise re-fetch the catalog and re-run the update check.
+    fn on_check_updates(&self) {
+        if self.state.borrow().busy {
+            return;
         }
+        if let Some(url) = self.state.borrow().update_url.clone() {
+            open_in_browser(&url);
+            return;
+        }
+        self.refresh();
+        self.spawn_update_check();
+    }
+
+    fn spawn_fetch_catalog(&self) {
+        self.state.borrow_mut().busy = true;
         let shared = Arc::clone(&self.shared);
         let sender = self.notice.sender();
         std::thread::spawn(move || {
@@ -466,13 +684,78 @@ impl HubApp {
         });
     }
 
-    fn selected_view(&self) -> Option<ToolView> {
-        let state = self.state.borrow();
-        state.selected.and_then(|row| state.views.get(row).cloned())
+    fn view_at(&self, index: usize) -> Option<ToolView> {
+        self.state.borrow().views.get(index).cloned()
     }
 
-    fn do_install_or_update(&self, is_update: bool) {
-        let Some(view) = self.selected_view() else { return };
+    fn locate_card_button(&self, handle: &nwg::ControlHandle) -> Option<(usize, CardButton)> {
+        self.cards.borrow().iter().find_map(|card| {
+            if *handle == card.btn_primary.handle {
+                Some((card.view_index, CardButton::Primary))
+            } else if *handle == card.btn_more.handle {
+                Some((card.view_index, CardButton::More))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn card_primary(&self, index: usize) {
+        let Some(view) = self.view_at(index) else { return };
+        match view.status {
+            ToolStatus::Installed | ToolStatus::UpdateAvailable => self.do_run(index),
+            ToolStatus::NotInstalled => self.do_install_or_update(index, false),
+        }
+    }
+
+    /// Opens the "…" overflow menu for a card and acts on the chosen command.
+    fn card_more(&self, index: usize) {
+        use winapi::um::winuser::{
+            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenu, MF_SEPARATOR, MF_STRING,
+            TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+        };
+        let Some(view) = self.view_at(index) else { return };
+        let Some(hwnd) = self.window.handle.hwnd() else { return };
+        let tr = self.tr();
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+
+        let cmd = unsafe {
+            let menu = CreatePopupMenu();
+            AppendMenuW(menu, MF_STRING, CMD_DETAILS, wide(tr.more_details).as_ptr());
+            match view.status {
+                ToolStatus::UpdateAvailable => {
+                    AppendMenuW(menu, MF_STRING, CMD_UPDATE, wide(tr.more_update).as_ptr());
+                    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+                    AppendMenuW(menu, MF_STRING, CMD_UNINSTALL, wide(tr.more_uninstall).as_ptr());
+                }
+                ToolStatus::Installed => {
+                    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+                    AppendMenuW(menu, MF_STRING, CMD_UNINSTALL, wide(tr.more_uninstall).as_ptr());
+                }
+                ToolStatus::NotInstalled => {
+                    if !view.entry.homepage.is_empty() {
+                        AppendMenuW(menu, MF_STRING, CMD_HOMEPAGE, wide(tr.more_homepage).as_ptr());
+                    }
+                }
+            }
+            let mut pt = winapi::shared::windef::POINT { x: 0, y: 0 };
+            GetCursorPos(&mut pt);
+            let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, std::ptr::null_mut());
+            DestroyMenu(menu);
+            cmd as usize
+        };
+
+        match cmd {
+            CMD_DETAILS => self.show_details(index),
+            CMD_UPDATE => self.do_install_or_update(index, true),
+            CMD_UNINSTALL => self.do_uninstall(index),
+            CMD_HOMEPAGE => open_in_browser(&view.entry.homepage),
+            _ => {}
+        }
+    }
+
+    fn do_install_or_update(&self, index: usize, is_update: bool) {
+        let Some(view) = self.view_at(index) else { return };
         if self.state.borrow().busy {
             return;
         }
@@ -507,8 +790,8 @@ impl HubApp {
         });
     }
 
-    fn do_uninstall(&self) {
-        let Some(view) = self.selected_view() else { return };
+    fn do_uninstall(&self, index: usize) {
+        let Some(view) = self.view_at(index) else { return };
         if self.state.borrow().busy {
             return;
         }
@@ -533,24 +816,33 @@ impl HubApp {
         });
     }
 
-    fn do_run(&self) {
-        let Some(view) = self.selected_view() else { return };
+    fn do_run(&self, index: usize) {
+        let Some(view) = self.view_at(index) else { return };
         if let Err(error) = engine::launch(&view.entry.id) {
             nwg::modal_error_message(&self.window.handle, self.tr().op_error_title, &error.to_string());
         }
+    }
+
+    fn show_details(&self, index: usize) {
+        let Some(view) = self.view_at(index) else { return };
+        let lang = self.state.borrow().lang;
+        let tr = t(lang);
+        let title = tr.details_title.replace("%S", &view.entry.name);
+        nwg::modal_info_message(&self.window.handle, &title, &details_text(&view, lang, tr));
     }
 
     /// Enters the busy state: disable actions, show the progress bar (for
     /// downloads) and the cancel button.
     fn begin_op(&self, cancellable: bool) {
         self.state.borrow_mut().busy = true;
-        self.set_actions_enabled(false);
+        self.refresh_enabled();
         if cancellable {
             self.progress.set_visible(true);
             self.progress.set_pos(0);
             self.btn_cancel.set_visible(true);
             self.btn_cancel.set_enabled(true);
         }
+        self.layout();
     }
 
     fn end_op(&self) {
@@ -558,7 +850,22 @@ impl HubApp {
         self.progress.set_visible(false);
         self.btn_cancel.set_visible(false);
         self.reload_installed();
-        self.update_buttons();
+        self.populate();
+    }
+
+    /// Enables/disables the per-card buttons and the check-updates action to
+    /// match the busy state and each tool's installability.
+    fn refresh_enabled(&self) {
+        let busy = self.state.borrow().busy;
+        self.btn_check.set_enabled(!busy);
+        for card in self.cards.borrow().iter() {
+            let primary = match card.kind {
+                CardKind::Installed { .. } => !busy,
+                CardKind::Available { installable } => !busy && installable,
+            };
+            card.btn_primary.set_enabled(primary);
+            card.btn_more.set_enabled(!busy);
+        }
     }
 
     fn drain_shared(&self) {
@@ -577,12 +884,10 @@ impl HubApp {
             {
                 let mut state = self.state.borrow_mut();
                 state.catalog = catalog;
-                state.source = source;
                 state.busy = false;
             }
             self.reload_installed();
-            self.populate_list();
-            self.update_buttons();
+            self.populate();
             match source {
                 Source::Embedded => self.set_status(self.tr().status_offline, StatusTone::Warning),
                 _ => self.set_status(self.tr().status_ready, StatusTone::Ok),
@@ -596,10 +901,7 @@ impl HubApp {
         if let Some(result) = op_result {
             self.end_op();
             match result {
-                OpResult::Done => {
-                    self.populate_list();
-                    self.set_status(self.tr().status_done, StatusTone::Ok);
-                }
+                OpResult::Done => self.set_status(self.tr().status_done, StatusTone::Ok),
                 OpResult::Cancelled => self.set_status(self.tr().status_ready, StatusTone::Ok),
                 OpResult::InUse => {
                     nwg::modal_error_message(&self.window.handle, self.tr().op_error_title, self.tr().err_in_use);
@@ -642,7 +944,6 @@ impl HubApp {
                 self.set_status(&text, StatusTone::Busy);
             }
             _ => {
-                // Unknown size: keep the bar moving, show bytes so far.
                 self.progress.set_pos((p.done / 65536 % 100) as u32);
                 let text = self.tr().status_installing.replace("%S", &p.tool);
                 self.set_status(&text, StatusTone::Busy);
@@ -657,73 +958,107 @@ impl HubApp {
         state.views = model::merge(&state.catalog, &installed);
     }
 
-    fn populate_list(&self) {
-        self.listview.clear();
-        let state = self.state.borrow();
-        let tr = t(state.lang);
-        for (index, view) in state.views.iter().enumerate() {
-            let installed = view.installed.as_ref().map(|t| t.version.clone()).unwrap_or_else(|| tr.d_none.into());
-            let size = format_size(view.entry.size_bytes, tr);
-            let row = [
-                (index + 1).to_string(),
-                view.entry.name.clone(),
-                installed,
-                view.entry.version.clone(),
-                status_label(view.status, tr).to_string(),
-                size,
-            ];
-            self.listview.insert_items_row(None, &row);
-        }
-        drop(state);
-        self.details.set_text(self.tr().details_placeholder);
-        self.set_tools_count_text();
-    }
-
-    fn select_row(&self, row: usize) {
-        let text = {
-            let mut state = self.state.borrow_mut();
-            if state.views.get(row).is_none() {
-                return;
-            }
-            state.selected = Some(row);
-            let lang = state.lang;
-            let view = &state.views[row];
-            details_text(view, lang, t(lang))
-        };
-        self.details.set_text(&text);
-        self.update_buttons();
-    }
-
-    fn update_buttons(&self) {
-        let (installable, status, has_sel, busy) = {
+    /// Rebuilds the card controls from the current views (installed first),
+    /// then re-runs layout.
+    fn populate(&self) {
+        let (order, lang) = {
             let state = self.state.borrow();
-            match state.selected.and_then(|r| state.views.get(r)) {
-                Some(view) => (view.entry.is_installable(), Some(view.status), true, state.busy),
-                None => (false, None, false, state.busy),
+            let mut installed = Vec::new();
+            let mut available = Vec::new();
+            for (i, v) in state.views.iter().enumerate() {
+                match v.status {
+                    ToolStatus::Installed | ToolStatus::UpdateAvailable => installed.push(i),
+                    ToolStatus::NotInstalled => available.push(i),
+                }
             }
+            installed.extend(available);
+            (installed, state.lang)
         };
-        let installed = matches!(status, Some(ToolStatus::Installed) | Some(ToolStatus::UpdateAvailable));
-        let can_install = has_sel && !busy && status == Some(ToolStatus::NotInstalled) && installable;
-        let can_update = has_sel && !busy && status == Some(ToolStatus::UpdateAvailable) && installable;
-        let can_run = has_sel && !busy && installed;
-        let can_uninstall = has_sel && !busy && installed;
-
-        self.btn_install.set_enabled(can_install);
-        self.btn_update.set_enabled(can_update);
-        self.btn_run.set_enabled(can_run);
-        self.btn_uninstall.set_enabled(can_uninstall);
-        self.mi_install.set_enabled(can_install);
-        self.mi_update.set_enabled(can_update);
-        self.mi_run.set_enabled(can_run);
-        self.mi_uninstall.set_enabled(can_uninstall);
+        let tr = t(lang);
+        let mut new_cards = Vec::with_capacity(order.len());
+        for &index in &order {
+            let view = self.state.borrow().views[index].clone();
+            new_cards.push(self.build_card(index, &view, lang, tr));
+        }
+        *self.cards.borrow_mut() = new_cards;
+        self.set_tools_count_text();
+        self.refresh_enabled();
+        self.layout();
     }
 
-    fn set_actions_enabled(&self, enabled: bool) {
-        for button in [&self.btn_install, &self.btn_run, &self.btn_uninstall, &self.btn_update] {
-            button.set_enabled(enabled);
-        }
-        for item in [&self.mi_install, &self.mi_run, &self.mi_uninstall, &self.mi_update] {
-            item.set_enabled(enabled);
+    fn build_card(&self, index: usize, view: &ToolView, lang: Lang, tr: &T) -> Card {
+        let dev = |v: i32| (v as f64 * nwg::scale_factor()) as i32;
+        let entry = &view.entry;
+
+        let kind = match view.status {
+            ToolStatus::Installed => CardKind::Installed { update: false },
+            ToolStatus::UpdateAvailable => CardKind::Installed { update: true },
+            ToolStatus::NotInstalled => CardKind::Available { installable: entry.is_installable() },
+        };
+
+        // Icon — a placeholder Icon forces the SS_ICON style, then the colored
+        // glyph is set directly via STM_SETIMAGE.
+        let placeholder = nwg::Icon::default();
+        let mut icon = nwg::ImageFrame::default();
+        nwg::ImageFrame::builder()
+            .parent(&self.window)
+            .icon(Some(&placeholder))
+            .size((ICON_SIZE, ICON_SIZE))
+            .build(&mut icon)
+            .expect("card icon");
+        let (glyph, glyph_color) = tool_glyph(&entry.id);
+        let icon_hicon = create_glyph_icon(glyph, glyph_color, dev(ICON_SIZE));
+        set_image_icon(&icon, icon_hicon);
+
+        let label = |text: &str, font: &nwg::Font| {
+            let mut control = nwg::Label::default();
+            nwg::Label::builder().parent(&self.window).text(text).build(&mut control).expect("card label");
+            control.set_font(Some(font));
+            control
+        };
+        let name = label(&entry.name, &self.font_name);
+        let version = label(&format!("v{}", entry.version), &self.font_small);
+        let desc = label(&short_desc(view, lang), &self.font_small);
+
+        let (status_glyph, status_color, status_label) = card_status(view, tr);
+        let placeholder2 = nwg::Icon::default();
+        let mut status_icon = nwg::ImageFrame::default();
+        nwg::ImageFrame::builder()
+            .parent(&self.window)
+            .icon(Some(&placeholder2))
+            .size((STATUS_ICON, STATUS_ICON))
+            .build(&mut status_icon)
+            .expect("card status icon");
+        let status_hicon = create_glyph_icon(status_glyph, status_color, dev(STATUS_ICON));
+        set_image_icon(&status_icon, status_hicon);
+        let status_text = label(status_label, &self.font_small);
+
+        let primary_text = match kind {
+            CardKind::Installed { .. } => tr.btn_open,
+            CardKind::Available { .. } => tr.btn_install,
+        };
+        let button = |text: &str| {
+            let mut control = nwg::Button::default();
+            nwg::Button::builder().parent(&self.window).text(text).build(&mut control).expect("card button");
+            apply_classic_button_theme(&control);
+            control
+        };
+        let btn_primary = button(primary_text);
+        let btn_more = button("…");
+
+        Card {
+            view_index: index,
+            kind,
+            icon,
+            name,
+            version,
+            desc,
+            status_icon,
+            status_text,
+            btn_primary,
+            btn_more,
+            icon_hicon,
+            status_hicon,
         }
     }
 
@@ -746,38 +1081,23 @@ impl HubApp {
     fn relabel_all(&self) {
         let tr = self.tr();
         self.window.set_text(tr.app_title);
-        self.lbl_catalog.set_text(tr.group_catalog);
-        self.lbl_details.set_text(tr.group_details);
-        self.btn_install.set_text(tr.btn_install);
-        self.btn_run.set_text(tr.btn_run);
-        self.btn_uninstall.set_text(tr.btn_uninstall);
-        self.btn_update.set_text(tr.btn_update);
+        self.lbl_title.set_text(tr.header_title);
+        self.lbl_subtitle.set_text(tr.header_subtitle);
+        self.btn_check.set_text(tr.btn_check_updates);
+        self.lbl_sec_installed.set_text(tr.sec_installed);
+        self.lbl_sec_available.set_text(tr.sec_available);
+        self.lbl_sec_hint.set_text(tr.sec_available_hint);
         self.btn_cancel.set_text(tr.btn_cancel);
-        let titles = [tr.col_num, tr.col_tool, tr.col_installed, tr.col_available, tr.col_status, tr.col_size];
-        for (i, title) in titles.iter().enumerate() {
-            self.listview.update_column(i, nwg::InsertListViewColumn {
-                index: Some(i as i32),
-                fmt: None,
-                width: None,
-                text: Some((*title).into()),
-            });
-        }
         set_submenu_text(&self.menu_file, tr.menu_file);
-        set_submenu_text(&self.menu_tools, tr.menu_tools);
         set_submenu_text(&self.menu_help, tr.menu_help);
         set_menu_item_text(&self.mi_refresh, tr.menu_file_refresh);
         set_menu_item_text(&self.mi_prefs, tr.menu_file_prefs);
         set_menu_item_text(&self.mi_exit, tr.menu_file_exit);
-        set_menu_item_text(&self.mi_install, tr.menu_tools_install);
-        set_menu_item_text(&self.mi_run, tr.menu_tools_run);
-        set_menu_item_text(&self.mi_uninstall, tr.menu_tools_uninstall);
-        set_menu_item_text(&self.mi_update, tr.menu_tools_update);
         set_menu_item_text(&self.mi_site, tr.menu_help_site);
         set_menu_item_text(&self.mi_about, tr.menu_help_about);
         self.redraw_menu_bar();
         self.set_version_text();
-        self.populate_list();
-        self.update_buttons();
+        self.populate();
     }
 
     fn redraw_menu_bar(&self) {
@@ -813,6 +1133,17 @@ impl HubApp {
     }
 }
 
+/// Sets a raw HICON on an SS_ICON image frame (nwg's `Icon` can't wrap a bare
+/// handle, so we send STM_SETIMAGE ourselves).
+fn set_image_icon(frame: &nwg::ImageFrame, hicon: HICON) {
+    use winapi::um::winuser::{SendMessageW, IMAGE_ICON, STM_SETIMAGE};
+    if let Some(hwnd) = frame.handle.hwnd() {
+        unsafe {
+            SendMessageW(hwnd, STM_SETIMAGE, IMAGE_ICON as usize, hicon as isize);
+        }
+    }
+}
+
 /// Maps an engine result to the UI outcome, keeping the "in use" case typed so
 /// the UI can show a localized message instead of the engine's English string.
 fn op_outcome(result: Result<(), engine::EngineError>) -> OpResult {
@@ -824,11 +1155,36 @@ fn op_outcome(result: Result<(), engine::EngineError>) -> OpResult {
     }
 }
 
-fn status_label(status: ToolStatus, tr: &T) -> &'static str {
-    match status {
-        ToolStatus::NotInstalled => tr.st_not_installed,
-        ToolStatus::Installed => tr.st_installed,
-        ToolStatus::UpdateAvailable => tr.st_update,
+/// The status glyph, its color, and the chip label for a tool.
+fn card_status(view: &ToolView, tr: &T) -> (u16, (u8, u8, u8), &'static str) {
+    match view.status {
+        ToolStatus::Installed => (GLYPH_INSTALLED, COLOR_OK, tr.st_installed),
+        ToolStatus::UpdateAvailable => (GLYPH_UPDATE, COLOR_WARNING, tr.st_update),
+        ToolStatus::NotInstalled if view.entry.is_installable() => (GLYPH_AVAILABLE, COLOR_ACCENT, tr.st_available),
+        ToolStatus::NotInstalled => (GLYPH_UNAVAILABLE, COLOR_TOOL_DEFAULT, tr.st_unavailable),
+    }
+}
+
+/// A per-tool icon glyph + accent color, keyed by catalog id.
+fn tool_glyph(id: &str) -> (u16, (u8, u8, u8)) {
+    match id {
+        "mcp-console" => (GLYPH_CONSOLE, COLOR_OK),
+        _ => (GLYPH_TOOL, COLOR_ACCENT),
+    }
+}
+
+/// One-line, whitespace-collapsed, length-capped description for the card.
+fn short_desc(view: &ToolView, lang: Lang) -> String {
+    let raw = match lang {
+        Lang::PtBr => &view.entry.description_pt,
+        Lang::En => &view.entry.description_en,
+    };
+    let text: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > 96 {
+        let clipped: String = text.chars().take(95).collect();
+        format!("{}…", clipped.trim_end())
+    } else {
+        text
     }
 }
 
@@ -862,18 +1218,6 @@ fn details_text(view: &ToolView, lang: Lang, tr: &T) -> String {
         lines.pop();
     }
     lines.join("\r\n")
-}
-
-fn format_size(bytes: u64, tr: &T) -> String {
-    if bytes == 0 {
-        return tr.size_unknown.to_string();
-    }
-    let mb = bytes as f64 / (1024.0 * 1024.0);
-    if mb >= 1.0 {
-        format!("{mb:.1} MB")
-    } else {
-        format!("{:.0} KB", bytes as f64 / 1024.0)
-    }
 }
 
 fn create_status_icons() -> StatusIcons {
