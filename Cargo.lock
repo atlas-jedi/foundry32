@@ -116,6 +116,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "foundry-common"
+version = "0.1.0"
+dependencies = [
+ "native-windows-gui",
+ "winapi",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -218,6 +226,7 @@ name = "mcp-hangar"
 version = "1.1.0"
 dependencies = [
  "embed-resource",
+ "foundry-common",
  "minreq",
  "native-windows-gui",
  "serde_json",

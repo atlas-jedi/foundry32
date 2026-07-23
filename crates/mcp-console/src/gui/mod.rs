@@ -11,12 +11,17 @@ use crate::model::{McpServer, Scope, Transport};
 use crate::mutation::{self, ServerDraft};
 use crate::settings::AppSettings;
 use crate::update_check::{self, UpdateInfo};
+use foundry_common::theme::{apply_explorer_theme, create_glyph_icon};
+use foundry_common::ui::{insert_report_list_view_column, set_menu_item_text, set_submenu_text};
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+// Re-exported so the dialog submodules keep using `super::apply_classic_button_theme`.
+pub(crate) use foundry_common::theme::apply_classic_button_theme;
 
 const CONNECTORS_URL: &str = "https://claude.ai/settings/connectors";
 const REPO_URL: &str = "https://github.com/atlas-jedi/mcp-hangar";
@@ -935,19 +940,6 @@ fn open_in_browser(url: &str) {
         .spawn();
 }
 
-/// Renders a themed (comctl32 v6) button with the classic 3D bevel look by
-/// pointing the theme manager at a non-existent theme — the documented
-/// `SetWindowTheme(hwnd, L" ", L" ")` fallback-to-classic trick.
-pub(crate) fn apply_classic_button_theme(button: &nwg::Button) {
-    set_window_theme(&button.handle, " ", Some(" "));
-}
-
-/// Explorer item styling for the list view (hover highlight, softer selection),
-/// matching what Explorer/Wireshark report views look like.
-fn apply_explorer_theme(handle: &nwg::ControlHandle) {
-    set_window_theme(handle, "Explorer", None);
-}
-
 fn create_status_icons() -> StatusIcons {
     let size = (16.0 * nwg::scale_factor()) as i32;
     StatusIcons {
@@ -957,169 +949,7 @@ fn create_status_icons() -> StatusIcons {
     }
 }
 
-/// Renders one Segoe MDL2 Assets glyph (the native Windows 10/11 icon font)
-/// into a colored ARGB icon: the glyph is drawn white on black, the coverage
-/// becomes the alpha channel, and the fill color is premultiplied in. Returns
-/// null on failure — callers treat that as "no icon".
-fn create_glyph_icon(glyph: u16, (r, g, b): (u8, u8, u8), size: i32) -> winapi::shared::windef::HICON {
-    use winapi::shared::windef::RECT;
-    use winapi::um::wingdi::{
-        CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
-        GdiFlush, SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-        DIB_RGB_COLORS, FW_NORMAL, OUT_DEFAULT_PRECIS, TRANSPARENT,
-    };
-    use winapi::um::winuser::{
-        CreateIconIndirect, DrawTextW, GetDC, ReleaseDC, DT_CENTER, DT_NOCLIP, DT_SINGLELINE,
-        DT_VCENTER, ICONINFO,
-    };
-
-    unsafe {
-        let screen_dc = GetDC(std::ptr::null_mut());
-        let memory_dc = CreateCompatibleDC(screen_dc);
-        if memory_dc.is_null() {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return std::ptr::null_mut();
-        }
-
-        let mut info: BITMAPINFO = std::mem::zeroed();
-        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        info.bmiHeader.biWidth = size;
-        info.bmiHeader.biHeight = -size; // top-down
-        info.bmiHeader.biPlanes = 1;
-        info.bmiHeader.biBitCount = 32;
-        info.bmiHeader.biCompression = BI_RGB;
-        let mut bits: *mut winapi::ctypes::c_void = std::ptr::null_mut();
-        let color_bitmap = CreateDIBSection(memory_dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
-        if color_bitmap.is_null() || bits.is_null() {
-            DeleteDC(memory_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return std::ptr::null_mut();
-        }
-        let previous_bitmap = SelectObject(memory_dc, color_bitmap as _);
-
-        let face: Vec<u16> = "Segoe MDL2 Assets\0".encode_utf16().collect();
-        let font = CreateFontW(
-            -size, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face.as_ptr(),
-        );
-        let previous_font = SelectObject(memory_dc, font as _);
-        SetTextColor(memory_dc, 0x00FF_FFFF);
-        SetBkMode(memory_dc, TRANSPARENT as i32);
-        let mut rect = RECT { left: 0, top: 0, right: size, bottom: size };
-        let text = [glyph];
-        DrawTextW(memory_dc, text.as_ptr(), 1, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
-        GdiFlush();
-
-        let pixels = bits as *mut u32;
-        for offset in 0..(size * size) as usize {
-            let coverage = *pixels.add(offset) & 0xFF;
-            let premultiply = |channel: u8| (channel as u32 * coverage) / 255;
-            *pixels.add(offset) =
-                (coverage << 24) | (premultiply(r) << 16) | (premultiply(g) << 8) | premultiply(b);
-        }
-
-        SelectObject(memory_dc, previous_font);
-        DeleteObject(font as _);
-        SelectObject(memory_dc, previous_bitmap);
-
-        let mask_bits = vec![0u8; (size as usize).div_ceil(8) * 2 * size as usize];
-        let mask_bitmap = CreateBitmap(size, size, 1, 1, mask_bits.as_ptr() as _);
-        let mut icon_info = ICONINFO {
-            fIcon: 1,
-            xHotspot: 0,
-            yHotspot: 0,
-            hbmMask: mask_bitmap,
-            hbmColor: color_bitmap,
-        };
-        let icon = CreateIconIndirect(&mut icon_info);
-
-        DeleteObject(mask_bitmap as _);
-        DeleteObject(color_bitmap as _);
-        DeleteDC(memory_dc);
-        ReleaseDC(std::ptr::null_mut(), screen_dc);
-        icon
-    }
-}
-
-fn set_window_theme(handle: &nwg::ControlHandle, app_name: &str, id_list: Option<&str>) {
-    use winapi::um::uxtheme::SetWindowTheme;
-    let Some(hwnd) = handle.hwnd() else { return };
-    let wide = |text: &str| text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
-    let app_name_wide = wide(app_name);
-    let id_list_wide = id_list.map(wide);
-    let id_list_ptr = id_list_wide.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
-    unsafe {
-        SetWindowTheme(hwnd, app_name_wide.as_ptr(), id_list_ptr);
-    }
-}
-
-/// Updates a menu item's caption in place (nwg has no set_text for menu items).
-pub(crate) fn set_menu_item_text(item: &nwg::MenuItem, text: &str) {
-    use winapi::um::winuser::{SetMenuItemInfoW, MENUITEMINFOW, MIIM_STRING};
-    let nwg::ControlHandle::MenuItem(parent, id) = item.handle else { return };
-    let mut wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
-    info.fMask = MIIM_STRING;
-    info.dwTypeData = wide.as_mut_ptr();
-    unsafe {
-        SetMenuItemInfoW(parent, id, 0, &info);
-    }
-}
-
-/// Updates a top-level menu caption by locating its position in the parent
-/// menu bar via its HMENU (submenus have no command id to address them by).
-fn set_submenu_text(menu: &nwg::Menu, text: &str) {
-    use winapi::um::winuser::{
-        GetMenuItemCount, GetMenuItemInfoW, SetMenuItemInfoW, MENUITEMINFOW, MIIM_STRING, MIIM_SUBMENU,
-    };
-    let nwg::ControlHandle::Menu(parent, own) = menu.handle else { return };
-    let count = unsafe { GetMenuItemCount(parent) }.max(0) as u32;
-    for position in 0..count {
-        let mut probe: MENUITEMINFOW = unsafe { std::mem::zeroed() };
-        probe.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
-        probe.fMask = MIIM_SUBMENU;
-        let found = unsafe { GetMenuItemInfoW(parent, position, 1, &mut probe) };
-        if found == 0 || probe.hSubMenu != own {
-            continue;
-        }
-        let mut wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
-        info.fMask = MIIM_STRING;
-        info.dwTypeData = wide.as_mut_ptr();
-        unsafe {
-            SetMenuItemInfoW(parent, position, 1, &info);
-        }
-        return;
-    }
-}
-
-/// Inserts a report-view list view column via a direct `LVM_INSERTCOLUMNW` call.
-///
-/// `nwg::ListView::insert_column` unconditionally probes the existing column
-/// count first by sending `LVM_GETCOLUMNWIDTH` in a loop until it returns 0 —
-/// a message Microsoft documents as valid only for LVS_LIST/LVS_ICON views.
-/// Sent against our LVS_REPORT (Detailed) list view, it never returns 0,
-/// spinning the UI thread at 100% CPU forever before the message pump even
-/// starts. We always supply an explicit column index, so that probed count
-/// is never used — this reimplements only the needed subset of the call.
-fn insert_report_list_view_column(listview: &nwg::ListView, index: i32, width: i32, text: &str) {
-    use winapi::um::commctrl::{LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVM_INSERTCOLUMNW};
-    use winapi::um::winuser::SendMessageW;
-
-    let Some(handle) = listview.handle.hwnd() else { return };
-    let scaled_width = (width as f64 * nwg::scale_factor()) as i32;
-    let mut wide_text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-
-    let mut column: LVCOLUMNW = unsafe { std::mem::zeroed() };
-    column.mask = LVCF_TEXT | LVCF_WIDTH;
-    column.cx = scaled_width;
-    column.pszText = wide_text.as_mut_ptr();
-    column.cchTextMax = wide_text.len() as i32;
-
-    unsafe {
-        SendMessageW(handle, LVM_INSERTCOLUMNW, index as usize, &mut column as *mut LVCOLUMNW as isize);
-    }
-}
+// Classic theming (apply_classic_button_theme / apply_explorer_theme /
+// create_glyph_icon) and the menu/list-view shims (set_menu_item_text /
+// set_submenu_text / insert_report_list_view_column) now live in
+// `foundry_common::{theme, ui}` and are imported at the top of this module.

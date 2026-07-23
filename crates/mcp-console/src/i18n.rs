@@ -4,40 +4,9 @@
 //! `gui::manual_dialog`: `# ` heading, `## ` subheading, `!! ` warning,
 //! two-space indent for example/code lines, anything else is body text.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lang {
-    PtBr,
-    En,
-}
-
-impl Lang {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Lang::PtBr => "pt-BR",
-            Lang::En => "en",
-        }
-    }
-
-    pub fn from_code(code: &str) -> Option<Lang> {
-        match code {
-            "pt-BR" => Some(Lang::PtBr),
-            "en" => Some(Lang::En),
-            _ => None,
-        }
-    }
-}
-
-/// Detects the Windows UI language: Portuguese → PtBr, anything else → En.
-pub fn detect_system_lang() -> Lang {
-    const LANG_PORTUGUESE: u16 = 0x16;
-    // SAFETY: GetUserDefaultUILanguage takes no arguments and only returns a LANGID.
-    let langid = unsafe { winapi::um::winnls::GetUserDefaultUILanguage() };
-    if (langid & 0x3FF) == LANG_PORTUGUESE {
-        Lang::PtBr
-    } else {
-        Lang::En
-    }
-}
+// The `Lang` selector and system detection are shared across the workspace.
+// Re-exported so the rest of the console keeps referring to `crate::i18n::Lang`.
+pub use foundry_common::lang::{detect_system_lang, Lang};
 
 pub struct T {
     pub app_title: &'static str,

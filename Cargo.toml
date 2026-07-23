@@ -1,24 +1,17 @@
-[package]
-name = "mcp-hangar"
-version = "1.1.0"
+[workspace]
+resolver = "2"
+members = ["crates/foundry-common", "crates/mcp-console"]
+
+# Common metadata inherited by member crates via `field.workspace = true`.
+# NOTE: `version` is intentionally NOT here — each crate carries its own
+# version (the hub and each tool release on independent version lines).
+[workspace.package]
 edition = "2021"
-description = "Native Windows GUI to inspect and manage Claude Code MCP servers, with clear account-level vs local scope identification"
 license = "MIT"
 repository = "https://github.com/atlas-jedi/mcp-hangar"
 
-[dependencies]
-native-windows-gui = { version = "1.0.13", features = [
-    "list-view", "listbox", "combobox", "textbox", "rich-textbox", "notice",
-    "status-bar", "tooltip", "message-window", "cursor", "menu", "embed-resource",
-    "high-dpi",
-] }
-winapi = { version = "0.3.9", features = ["winnls", "winuser", "commctrl", "uxtheme", "wingdi"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-minreq = { version = "2", features = ["https-native"] }
-
-[build-dependencies]
-embed-resource = "2"
-
+# Size-optimized release profile. Workspace-level profiles apply to every
+# member; per-crate `[profile.*]` sections are ignored, so this must live here.
 [profile.release]
 opt-level = "z"
 lto = true

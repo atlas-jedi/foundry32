@@ -7,7 +7,6 @@ mod model;
 mod mutation;
 mod settings;
 mod update_check;
-mod winproc;
 
 use std::fs;
 

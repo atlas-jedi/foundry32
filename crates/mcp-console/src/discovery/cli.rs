@@ -5,7 +5,7 @@
 //! (the CLI prefixes the status with a check/cross mark, stripped on parse —
 //! the UI is symbol-free by design).
 
-use crate::winproc::run_captured;
+use foundry_common::run_captured;
 use std::path::{Path, PathBuf};
 
 pub struct CliListEntry {

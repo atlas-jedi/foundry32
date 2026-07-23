@@ -3,7 +3,7 @@
 
 use crate::discovery::claude_json::claude_json_path;
 use crate::model::{Scope, Transport};
-use crate::winproc::run_captured;
+use foundry_common::run_captured;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
