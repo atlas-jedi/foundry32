@@ -25,3 +25,9 @@ jobs:
         with:
           name: mcp-console-x86
           path: target/i686-pc-windows-msvc/release/mcp-console.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: witn-x86
+          path: |
+            target/i686-pc-windows-msvc/release/witn.exe
+            target/i686-pc-windows-msvc/release/witn-gui.exe

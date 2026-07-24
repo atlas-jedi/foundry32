@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "registry_version": 1,
+  "registry_version": 2,
   "tools": [
     {
       "id": "mcp-console",
@@ -14,6 +14,28 @@
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32"
+    },
+    {
+      "id": "witn",
+      "name": "WITN",
+      "publisher": "Software Imperial",
+      "description_en": "Where Is The Node? Shows which app every node.exe on the machine belongs to — project, path, listening ports, RAM, CPU — and ends a whole process tree in one click. Ships the witn CLI on your PATH.",
+      "description_pt": "Where Is The Node? Mostra a qual app pertence cada node.exe da máquina — projeto, caminho, portas em escuta, RAM, CPU — e encerra a árvore inteira num clique. Inclui o CLI witn no seu PATH.",
+      "version": "1.0.0",
+      "exe": "witn-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.0/witn-gui.exe",
+      "sha256": "",
+      "size_bytes": 0,
+      "homepage": "https://github.com/atlas-jedi/foundry32",
+      "companions": [
+        {
+          "exe": "witn.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.0/witn.exe",
+          "sha256": "",
+          "size_bytes": 0
+        }
+      ],
+      "expose_on_path": true
     }
   ]
 }

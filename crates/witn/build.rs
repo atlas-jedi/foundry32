@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=assets/app.rc");
     println!("cargo:rerun-if-changed=assets/app.manifest");
+    println!("cargo:rerun-if-changed=assets/witn.ico");
 
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_env == "msvc" {

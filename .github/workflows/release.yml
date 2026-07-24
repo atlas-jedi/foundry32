@@ -45,9 +45,10 @@ jobs:
 
       # Generate the release's registry.json from the versioned metadata plus the
       # SHA-256/size of the binaries just built, and produce SHA256SUMS.txt. The
-      # gate fails the release if any tool lacks a built asset. This is what
-      # resolves the chicken-and-egg: the catalog and the assets are produced
-      # together, in-job, so hashes are always consistent.
+      # gate fails the release if any tool lacks a built asset — including each
+      # companion binary, so a multi-file tool can never ship half-catalogued.
+      # This is what resolves the chicken-and-egg: the catalog and the assets are
+      # produced together, in-job, so hashes are always consistent.
       - name: Generate registry.json + SHA256SUMS
         shell: pwsh
         run: |
@@ -58,14 +59,21 @@ jobs:
           $reg = Get-Content registry.json -Raw | ConvertFrom-Json
           $sums = New-Object System.Collections.Generic.List[string]
           foreach ($tool in $reg.tools) {
-            $exe = Join-Path $relDir $tool.exe
-            if (-not (Test-Path $exe)) { throw "registry gate: no built asset for '$($tool.id)': $exe" }
-            $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-            if ($hash.Length -ne 64) { throw "registry gate: bad sha for $($tool.id)" }
-            $tool.sha256 = $hash
-            $tool.size_bytes = [int64](Get-Item $exe).Length
-            $tool.download_url = "https://github.com/$repo/releases/download/$tag/$($tool.exe)"
-            $sums.Add("$hash  $($tool.exe)")
+            # The tool object itself carries the primary artifact's fields; the
+            # companions are objects of the same shape. Both are mutated in
+            # place, so $reg serialises with the release's real hashes.
+            $artifacts = @($tool)
+            if ($tool.companions) { $artifacts += @($tool.companions) }
+            foreach ($artifact in $artifacts) {
+              $exe = Join-Path $relDir $artifact.exe
+              if (-not (Test-Path $exe)) { throw "registry gate: no built asset for '$($tool.id)': $exe" }
+              $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+              if ($hash.Length -ne 64) { throw "registry gate: bad sha for $($tool.id)/$($artifact.exe)" }
+              $artifact.sha256 = $hash
+              $artifact.size_bytes = [int64](Get-Item $exe).Length
+              $artifact.download_url = "https://github.com/$repo/releases/download/$tag/$($artifact.exe)"
+              $sums.Add("$hash  $($artifact.exe)")
+            }
           }
           # Also checksum the hub itself and the installer (produced below).
           $hubHash = (Get-FileHash (Join-Path $relDir 'foundry32.exe') -Algorithm SHA256).Hash.ToLower()
@@ -128,12 +136,21 @@ jobs:
           wait-for-completion-timeout-in-seconds: 1800
           output-artifact-directory: dist
 
+      # Every binary the catalog points at has to be attached to this release —
+      # the download URLs generated above are exactly these file names.
       - name: Stage tool + hub assets
         shell: pwsh
         run: |
           $ver = $env:GITHUB_REF_NAME.TrimStart('v')
           $relDir = $env:REL_DIR
-          Copy-Item (Join-Path $relDir 'mcp-console.exe') dist\mcp-console.exe
+          $reg = Get-Content registry.json -Raw | ConvertFrom-Json
+          $exes = foreach ($tool in $reg.tools) {
+            $tool.exe
+            if ($tool.companions) { $tool.companions.exe }
+          }
+          foreach ($exe in ($exes | Where-Object { $_ } | Sort-Object -Unique)) {
+            Copy-Item (Join-Path $relDir $exe) (Join-Path 'dist' $exe)
+          }
           Copy-Item (Join-Path $relDir 'foundry32.exe') dist\foundry32.exe
           Compress-Archive -Path (Join-Path $relDir 'foundry32.exe') `
             -DestinationPath "dist\foundry32-$ver-x86-portable.zip" -Force
@@ -146,6 +163,8 @@ jobs:
             dist/foundry32-*-x86-portable.zip
             dist/foundry32.exe
             dist/mcp-console.exe
+            dist/witn.exe
+            dist/witn-gui.exe
             dist/registry.json
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true

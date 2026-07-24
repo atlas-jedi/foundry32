@@ -22,6 +22,10 @@ own user profile, and launches them — no admin rights, nothing touched outside
 - **Run** launches the tool detached, in its own directory.
 - **Update / Uninstall** are one click; a running tool is handled gracefully
   (updates swap the exe aside, uninstall asks you to close it first).
+- A tool may ship **more than one binary** (a GUI plus a command-line client, say)
+  — each file is hash-pinned in the catalog and they install as a unit — and may
+  ask for its folder to be published on your **user PATH** (`HKCU\Environment`,
+  no elevation), which uninstall takes back off.
 
 The catalog is fetched from the latest release and cached, with an embedded copy
 as an offline fallback.
@@ -31,6 +35,7 @@ as an offline fallback.
 | Tool | What it does |
 |---|---|
 | **MCP Console** | See and manage every MCP server your [Claude Code](https://code.claude.com) install knows about — with a clear answer to *"if I change this here, does it change on my other computers too?"* Labels each server's reach (account / machine / project), shows health, and edits the file-based ones via the official `claude mcp` CLI (never by hand-editing `~/.claude.json`). Env var **names** shown, values never read. |
+| **WITN** | *Where Is The Node?* — answers "which of these twenty `node.exe` is holding port 3000?" Lists every Node process grouped as a tree, naming the **app** behind it (project from its `package.json`, script or tool from its command line), with its folder, listening ports, RAM, CPU and uptime. Ends a whole process tree in one click, and opens the app's folder in Explorer. Also installs a `witn` CLI **on your PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
 
 More tools land in the catalog over time — the hub picks them up without needing
 a new Foundry32 build.
@@ -65,14 +70,17 @@ rustup toolchain install stable-i686-pc-windows-gnu --profile minimal
 cargo +stable-i686-pc-windows-gnu build --release --workspace
 ```
 
-This produces `target/i686-pc-windows-gnu/release/foundry32.exe` and
-`mcp-console.exe`. Local GNU builds also need i686 MinGW-w64 binutils (`as`,
-`ar`, `windres`) on PATH — rustup's bundled toolchain covers linking only.
-Release binaries are built by CI with `--target i686-pc-windows-msvc` (x86 —
-smaller on disk and in RAM) and have no such requirement.
+This produces `target/i686-pc-windows-gnu/release/foundry32.exe`,
+`mcp-console.exe`, `witn.exe` and `witn-gui.exe`. Local GNU builds also need
+i686 MinGW-w64 binutils (`as`, `ar`, `windres`) on PATH — rustup's bundled
+toolchain covers linking only. Release binaries are built by CI with
+`--target i686-pc-windows-msvc` (x86 — smaller on disk and in RAM) and have no
+such requirement.
 
-Headless modes for scripting/verification: `foundry32.exe --dump-catalog [file]`
-and `--check-update [file]`; `mcp-console.exe --dump [file]`.
+Headless modes for scripting/verification: `foundry32.exe --dump-catalog [file]`,
+`--check-update [file]` and `--dump-path [file]` (the user PATH as stored, plus
+which tool directories are published on it); `mcp-console.exe --dump [file]`;
+`witn.exe list` / `--dump [file]`.
 
 ## License
 
