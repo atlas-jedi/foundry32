@@ -6,6 +6,7 @@ mod gui;
 mod i18n;
 mod installed;
 mod model;
+mod pathenv;
 mod paths;
 mod registry;
 mod settings;
@@ -30,6 +31,11 @@ fn main() {
     if let Some(pos) = flag("--check-update") {
         let out = args.get(pos + 1).cloned().unwrap_or_else(|| "foundry32-update.txt".into());
         run_check_update(&out);
+        return;
+    }
+    if let Some(pos) = flag("--dump-path") {
+        let out = args.get(pos + 1).cloned().unwrap_or_else(|| "foundry32-path.txt".into());
+        run_dump_path(&out);
         return;
     }
     // Action flags exit 0 on success, non-zero on failure (no console output in
@@ -83,11 +89,49 @@ fn run_dump_catalog(out_path: &str) {
         let e = &view.entry;
         let inst = view.installed.as_ref().map(|t| t.version.as_str()).unwrap_or("-");
         report.push_str(&format!(
-            "id: {}\nname: {}\npublisher: {}\nversion: {} (installed: {})  status: {:?}\nexe: {}  size: {}\nurl: {}\nsha256: {}\nhomepage: {}\ndesc_en: {}\ndesc_pt: {}\ninstallable: {}\n\n",
+            "id: {}\nname: {}\npublisher: {}\nversion: {} (installed: {})  status: {:?}\nexe: {}  size: {}\nurl: {}\nsha256: {}\nhomepage: {}\ndesc_en: {}\ndesc_pt: {}\nexpose_on_path: {}\ninstallable: {}\n",
             e.id, e.name, e.publisher, e.version, inst, view.status, e.exe, e.size_bytes,
-            e.download_url, e.sha256, e.homepage, e.description_en, e.description_pt, e.is_installable(),
+            e.download_url, e.sha256, e.homepage, e.description_en, e.description_pt,
+            e.expose_on_path, e.is_installable(),
         ));
+        for companion in &e.companions {
+            report.push_str(&format!(
+                "companion: {}  size: {}\n  url: {}\n  sha256: {}\n",
+                companion.exe, companion.size_bytes, companion.download_url, companion.sha256,
+            ));
+        }
+        report.push('\n');
     }
+    let _ = fs::write(out_path, report);
+}
+
+/// The user's PATH exactly as stored, plus which tool directories are on it —
+/// the headless counterpart to the PATH exposure the installer performs.
+fn run_dump_path(out_path: &str) {
+    let report = match pathenv::read_raw() {
+        Err(error) => format!("error {error}\n"),
+        Ok(None) => "value: <absent>\n".to_string(),
+        Ok(Some(value)) => {
+            let text = String::from_utf16_lossy(
+                &value
+                    .bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .take_while(|unit| *unit != 0)
+                    .collect::<Vec<u16>>(),
+            );
+            let mut installed = installed::InstalledState::load();
+            installed.reconcile();
+            let exposed: Vec<String> = registry::load()
+                .0
+                .tools
+                .iter()
+                .filter(|tool| tool.expose_on_path && installed.get(&tool.id).is_some())
+                .map(|tool| paths::tool_dir(&tool.id).display().to_string())
+                .collect();
+            format!("type: {:?}\nexposed: {}\nvalue: {}\n", value.vtype, exposed.join(", "), text)
+        }
+    };
     let _ = fs::write(out_path, report);
 }
 
@@ -116,14 +160,15 @@ fn run_install(id: Option<String>) {
 fn run_install_local(exe: Option<String>, id: Option<String>) {
     let (Some(exe), Some(id)) = (exe, id) else { exit(2) };
     let src = PathBuf::from(&exe);
-    let (version, exe_name) = match catalog_entry(&id) {
-        Some(entry) => (entry.version, entry.exe),
+    let (version, exe_name, expose_path) = match catalog_entry(&id) {
+        Some(entry) => (entry.version, entry.exe, entry.expose_on_path),
         None => (
             "0.0.0-local".to_string(),
             src.file_name().and_then(|n| n.to_str()).unwrap_or("tool.exe").to_string(),
+            false,
         ),
     };
-    match engine::install_from_file(&id, &src, &version, &exe_name) {
+    match engine::install_from_file(&id, &src, &version, &exe_name, expose_path) {
         Ok(()) => exit(0),
         Err(_) => exit(1),
     }

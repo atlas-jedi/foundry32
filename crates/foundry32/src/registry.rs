@@ -21,6 +21,25 @@ const SCHEMA: u32 = 1;
 /// `objects.githubusercontent.com` (GitHub's asset CDN) is covered too.
 const ALLOWED_HOST_SUFFIXES: [&str; 2] = ["github.com", "githubusercontent.com"];
 
+/// One downloadable file of a tool. A tool always has a primary artifact (the
+/// exe the hub launches) and may list companions — extra binaries installed
+/// alongside it, each pinned to its own hash.
+#[derive(Clone, Debug)]
+pub struct Artifact {
+    pub exe: String,
+    pub download_url: String,
+    /// Lowercase 64-hex SHA-256, or empty when the registry hasn't been filled
+    /// in yet (metadata-only, e.g. the embedded seed) — install is blocked then.
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+impl Artifact {
+    fn is_verifiable(&self) -> bool {
+        is_hex64(&self.sha256) && is_allowed_url(&self.download_url)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolEntry {
     pub id: String,
@@ -36,13 +55,44 @@ pub struct ToolEntry {
     pub sha256: String,
     pub size_bytes: u64,
     pub homepage: String,
+    /// Extra binaries installed next to `exe`. Empty for single-file tools.
+    pub companions: Vec<Artifact>,
+    /// Whether the tool's install directory is published on the user's PATH
+    /// (`HKCU\Environment`), so a CLI it ships is callable from any shell.
+    pub expose_on_path: bool,
 }
 
 impl ToolEntry {
-    /// A tool can be installed only once its download is pinned to a verifiable
-    /// hash. The embedded/offline catalog carries empty hashes for display only.
+    /// The exe the hub launches — and the file `installed.json` records.
+    pub fn primary(&self) -> Artifact {
+        Artifact {
+            exe: self.exe.clone(),
+            download_url: self.download_url.clone(),
+            sha256: self.sha256.clone(),
+            size_bytes: self.size_bytes,
+        }
+    }
+
+    /// Everything an install has to fetch, primary first.
+    pub fn artifacts(&self) -> Vec<Artifact> {
+        std::iter::once(self.primary()).chain(self.companions.iter().cloned()).collect()
+    }
+
+    /// A tool can be installed only once *every* file it ships is pinned to a
+    /// verifiable hash. The embedded/offline catalog carries empty hashes for
+    /// display only.
     pub fn is_installable(&self) -> bool {
-        is_hex64(&self.sha256) && is_allowed_url(&self.download_url)
+        self.artifacts().iter().all(Artifact::is_verifiable)
+    }
+
+    /// Sum of the advertised sizes, or 0 if any artifact doesn't declare one —
+    /// used for a whole-install progress total.
+    pub fn total_bytes(&self) -> u64 {
+        let artifacts = self.artifacts();
+        if artifacts.iter().any(|a| a.size_bytes == 0) {
+            return 0;
+        }
+        artifacts.iter().map(|a| a.size_bytes).sum()
     }
 }
 
@@ -118,6 +168,14 @@ pub fn parse(raw: &str) -> Result<Catalog, String> {
 
 fn parse_entry(value: &Value) -> Option<ToolEntry> {
     let s = |key: &str| value[key].as_str().unwrap_or("").trim().to_string();
+    // `companions` is optional and additive: a catalog without it parses exactly
+    // as before. A malformed companion, though, sinks the whole entry — half a
+    // tool on disk is worse than a tool that stays out of the catalog.
+    let companions = match value.get("companions") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items.iter().map(parse_artifact).collect::<Option<Vec<_>>>()?,
+        Some(_) => return None,
+    };
     let entry = ToolEntry {
         id: s("id"),
         name: s("name"),
@@ -130,11 +188,13 @@ fn parse_entry(value: &Value) -> Option<ToolEntry> {
         sha256: s("sha256").to_lowercase(),
         size_bytes: value["size_bytes"].as_u64().unwrap_or(0),
         homepage: s("homepage"),
+        companions,
+        expose_on_path: value["expose_on_path"].as_bool().unwrap_or(false),
     };
     // Required fields for a usable entry. download_url, when present, must be a
     // trusted HTTPS host; sha256 may be empty (metadata-only), but if present
     // it must be well-formed.
-    if entry.id.is_empty() || entry.exe.is_empty() || entry.version.is_empty() {
+    if entry.id.is_empty() || entry.version.is_empty() || !is_safe_exe_name(&entry.exe) {
         return None;
     }
     if entry.download_url.is_empty() || !is_allowed_url(&entry.download_url) {
@@ -143,7 +203,40 @@ fn parse_entry(value: &Value) -> Option<ToolEntry> {
     if !entry.sha256.is_empty() && !is_hex64(&entry.sha256) {
         return None;
     }
+    // Two artifacts writing the same file would race in the install directory.
+    let mut names: Vec<String> = entry.artifacts().iter().map(|a| a.exe.to_lowercase()).collect();
+    names.sort();
+    names.dedup();
+    if names.len() != 1 + entry.companions.len() {
+        return None;
+    }
     Some(entry)
+}
+
+fn parse_artifact(value: &Value) -> Option<Artifact> {
+    let s = |key: &str| value[key].as_str().unwrap_or("").trim().to_string();
+    let artifact = Artifact {
+        exe: s("exe"),
+        download_url: s("download_url"),
+        sha256: s("sha256").to_lowercase(),
+        size_bytes: value["size_bytes"].as_u64().unwrap_or(0),
+    };
+    let sha_ok = artifact.sha256.is_empty() || is_hex64(&artifact.sha256);
+    if !is_safe_exe_name(&artifact.exe) || !is_allowed_url(&artifact.download_url) || !sha_ok {
+        return None;
+    }
+    Some(artifact)
+}
+
+/// The catalog names the files an install writes, so a name is only usable if it
+/// is a plain file name: no separators, no drive, no `..` — nothing that could
+/// escape the tool's own directory.
+pub fn is_safe_exe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name != ".."
+        && !name.contains(['/', '\\', ':'])
+        && !name.chars().any(|c| c.is_control())
 }
 
 pub fn is_hex64(text: &str) -> bool {

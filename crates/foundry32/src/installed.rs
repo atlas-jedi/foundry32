@@ -16,6 +16,13 @@ use std::fs;
 pub struct InstalledTool {
     pub version: String,
     pub exe: String,
+    /// Extra binaries installed next to `exe` (empty for single-file tools).
+    /// Recorded so uninstall can check them for locks and reconcile can tell a
+    /// half-deleted install from a complete one.
+    pub companions: Vec<String>,
+    /// True if installing this tool put its directory on the user's PATH — the
+    /// only record of what to undo at uninstall time.
+    pub path_exposed: bool,
     /// Unix epoch seconds, best-effort; 0 if the clock was unavailable.
     pub installed_at: u64,
 }
@@ -39,20 +46,37 @@ impl InstalledState {
                 let version = entry["version"].as_str().unwrap_or("").to_string();
                 let exe = entry["exe"].as_str().unwrap_or("").to_string();
                 let installed_at = entry["installed_at"].as_u64().unwrap_or(0);
+                // Fields added with multi-artifact tools: absent in files
+                // written by older hubs, which is exactly the default.
+                let companions = entry["companions"]
+                    .as_array()
+                    .map(|items| {
+                        items.iter().filter_map(|v| v.as_str()).map(str::to_string).collect()
+                    })
+                    .unwrap_or_default();
+                let path_exposed = entry["path_exposed"].as_bool().unwrap_or(false);
                 if !version.is_empty() && !exe.is_empty() {
-                    state.tools.insert(id.clone(), InstalledTool { version, exe, installed_at });
+                    state.tools.insert(
+                        id.clone(),
+                        InstalledTool { version, exe, companions, path_exposed, installed_at },
+                    );
                 }
             }
         }
         state
     }
 
-    /// Drops entries whose recorded exe no longer exists on disk (self-heal
-    /// after a manual delete or an interrupted install). Returns true if it
-    /// changed anything, so the caller can persist.
+    /// Drops entries whose recorded files no longer exist on disk (self-heal
+    /// after a manual delete or an interrupted install) — every artifact must be
+    /// present, so a half-deleted multi-binary tool reads as not installed and
+    /// gets a clean reinstall. Returns true if it changed anything, so the
+    /// caller can persist.
     pub fn reconcile(&mut self) -> bool {
         let before = self.tools.len();
-        self.tools.retain(|id, tool| paths::tool_exe(id, &tool.exe).exists());
+        self.tools.retain(|id, tool| {
+            paths::tool_exe(id, &tool.exe).exists()
+                && tool.companions.iter().all(|exe| paths::tool_exe(id, exe).exists())
+        });
         self.tools.len() != before
     }
 
@@ -82,6 +106,8 @@ impl InstalledState {
                 serde_json::json!({
                     "version": tool.version,
                     "exe": tool.exe,
+                    "companions": tool.companions,
+                    "path_exposed": tool.path_exposed,
                     "installed_at": tool.installed_at,
                 }),
             );

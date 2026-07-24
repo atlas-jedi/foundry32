@@ -1,16 +1,19 @@
 //! Install / update / uninstall / launch, with the Windows file-locking care
 //! the design review flagged.
 //!
-//! Commit order upholds the invariant *entry in installed.json => a verified
-//! exe exists*: download to a temp file, verify its SHA-256, rename it onto the
-//! final exe, then write installed.json last. A running old exe can't be
-//! overwritten but CAN be renamed aside, so updates move it out of the way.
-//! installed.json is always re-read fresh right before it's mutated, so two hub
-//! instances never lose each other's writes.
+//! Commit order upholds the invariant *entry in installed.json => verified exes
+//! exist*: download every artifact to a temp file and verify its SHA-256, only
+//! then rename them onto the final exes, and write installed.json last. A tool
+//! with companions is therefore all-or-nothing — a failure partway through
+//! leaves temp files (swept later) and no catalog entry. A running old exe
+//! can't be overwritten but CAN be renamed aside, so updates move it out of the
+//! way. installed.json is always re-read fresh right before it's mutated, so
+//! two hub instances never lose each other's writes.
 
 use crate::download::{self, DlError, Progress};
 use crate::installed::{now_epoch, InstalledState, InstalledTool};
 use crate::paths;
+use crate::pathenv;
 use crate::registry::ToolEntry;
 use std::fs;
 use std::os::windows::process::CommandExt;
@@ -44,11 +47,12 @@ impl std::fmt::Display for EngineError {
 
 /// Installs a fresh tool or updates an existing one (same path — an already
 /// present exe is moved aside first, so a running old version never blocks the
-/// swap). Writes installed.json last.
+/// swap). Every artifact is downloaded and verified before any of them is
+/// placed. Writes installed.json last.
 pub fn install(
     entry: &ToolEntry,
     cancel: &AtomicBool,
-    on_progress: impl FnMut(Progress),
+    mut on_progress: impl FnMut(Progress),
 ) -> Result<(), EngineError> {
     if !entry.is_installable() {
         return Err(EngineError::NotInstallable);
@@ -57,18 +61,46 @@ pub fn install(
     fs::create_dir_all(&dir).map_err(|e| EngineError::Io(e.to_string()))?;
     paths::sweep_stale_tmp();
 
-    let tmp = paths::tmp_path(&entry.id);
-    download::download_verify(&entry.download_url, &entry.sha256, &tmp, cancel, on_progress)
-        .map_err(EngineError::Download)?;
+    // Progress is reported for the install as a whole: bytes already finished
+    // plus what the current artifact has done. `total_bytes()` is 0 when the
+    // catalog doesn't size every file, in which case we fall back to whatever
+    // Content-Length the current download reports.
+    let artifacts = entry.artifacts();
+    let grand_total = entry.total_bytes();
+    let mut finished: u64 = 0;
+    let mut staged: Vec<(std::path::PathBuf, String)> = Vec::new();
 
-    let exe = paths::tool_exe(&entry.id, &entry.exe);
-    place_exe(&tmp, &exe, &dir, &entry.exe)?;
-    record_installed(&entry.id, &entry.version, &entry.exe)
+    for artifact in &artifacts {
+        let tmp = paths::tmp_path_for(&entry.id, &artifact.exe);
+        let mut this_artifact: u64 = 0;
+        download::download_verify(&artifact.download_url, &artifact.sha256, &tmp, cancel, |p| {
+            this_artifact = p.done;
+            let total = if grand_total > 0 { Some(grand_total) } else { p.total };
+            on_progress(Progress { done: finished + p.done, total });
+        })
+        .map_err(EngineError::Download)?;
+        finished += this_artifact;
+        staged.push((tmp, artifact.exe.clone()));
+    }
+
+    for (tmp, exe_name) in &staged {
+        place_exe(tmp, &paths::tool_exe(&entry.id, exe_name), &dir, exe_name)?;
+    }
+    expose_on_path(entry.expose_on_path, &dir)?;
+    record_installed(entry)
 }
 
 /// Dev/offline install from a local file (exercises the install path without a
-/// download). Used by the `--install-local` headless flag.
-pub fn install_from_file(id: &str, src: &Path, version: &str, exe_name: &str) -> Result<(), EngineError> {
+/// download). Used by the `--install-local` headless flag; installs the primary
+/// exe only, but honours the catalog's PATH exposure so that plumbing can be
+/// verified without a release.
+pub fn install_from_file(
+    id: &str,
+    src: &Path,
+    version: &str,
+    exe_name: &str,
+    expose_path: bool,
+) -> Result<(), EngineError> {
     let dir = paths::tool_dir(id);
     fs::create_dir_all(&dir).map_err(|e| EngineError::Io(e.to_string()))?;
     let exe = paths::tool_exe(id, exe_name);
@@ -77,7 +109,25 @@ pub fn install_from_file(id: &str, src: &Path, version: &str, exe_name: &str) ->
         retry_io(|| fs::rename(&exe, &aside)).map_err(|e| EngineError::Io(e.to_string()))?;
     }
     retry_io(|| fs::copy(src, &exe)).map_err(|e| EngineError::Io(e.to_string()))?;
-    record_installed(id, version, exe_name)
+    expose_on_path(expose_path, &dir)?;
+    let tool = InstalledTool {
+        version: version.to_string(),
+        exe: exe_name.to_string(),
+        companions: Vec::new(),
+        path_exposed: expose_path,
+        installed_at: now_epoch(),
+    };
+    save_installed(id, tool)
+}
+
+/// Publishes the tool's directory on the user's PATH when the catalog asks for
+/// it. Done after the exes are in place, so a shell that reacts to the
+/// broadcast finds a working command.
+fn expose_on_path(wanted: bool, dir: &Path) -> Result<(), EngineError> {
+    if !wanted {
+        return Ok(());
+    }
+    pathenv::add(dir).map(|_| ()).map_err(EngineError::Io)
 }
 
 /// Renames the verified temp file onto the final exe. If an exe is already
@@ -91,25 +141,38 @@ fn place_exe(tmp: &Path, exe: &Path, dir: &Path, exe_name: &str) -> Result<(), E
     retry_io(|| fs::rename(tmp, exe)).map_err(|e| EngineError::Io(e.to_string()))
 }
 
-fn record_installed(id: &str, version: &str, exe: &str) -> Result<(), EngineError> {
+fn record_installed(entry: &ToolEntry) -> Result<(), EngineError> {
+    let tool = InstalledTool {
+        version: entry.version.clone(),
+        exe: entry.exe.clone(),
+        companions: entry.companions.iter().map(|a| a.exe.clone()).collect(),
+        path_exposed: entry.expose_on_path,
+        installed_at: now_epoch(),
+    };
+    save_installed(&entry.id, tool)
+}
+
+fn save_installed(id: &str, tool: InstalledTool) -> Result<(), EngineError> {
     // Re-read fresh so a concurrent hub instance's changes aren't clobbered.
     let mut state = InstalledState::load();
-    state.upsert(
-        id,
-        InstalledTool { version: version.to_string(), exe: exe.to_string(), installed_at: now_epoch() },
-    );
+    state.upsert(id, tool);
     state.save_atomic().map_err(EngineError::Io)
 }
 
-/// Removes an installed tool's directory. Refuses if its exe is running.
+/// Removes an installed tool's directory, and its PATH entry if it had one.
+/// Refuses if any of its exes is running. The PATH is cleaned before the files
+/// go, so a failure there never leaves an entry pointing at a deleted folder.
 pub fn uninstall(id: &str) -> Result<(), EngineError> {
     let state = InstalledState::load();
     let Some(tool) = state.get(id) else { return Ok(()) };
-    let exe = paths::tool_exe(id, &tool.exe);
-    if exe_locked(&exe) {
+    let exes = std::iter::once(&tool.exe).chain(tool.companions.iter());
+    if exes.map(|exe| paths::tool_exe(id, exe)).any(|exe| exe_locked(&exe)) {
         return Err(EngineError::InUse);
     }
     let dir = paths::tool_dir(id);
+    if tool.path_exposed {
+        pathenv::remove(&dir).map_err(EngineError::Io)?;
+    }
     if dir.exists() {
         retry_io(|| fs::remove_dir_all(&dir)).map_err(|e| EngineError::Io(e.to_string()))?;
     }

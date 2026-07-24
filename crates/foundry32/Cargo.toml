@@ -2,7 +2,7 @@
 # installs; the repo tag `v*` tracks this crate's version.
 [package]
 name = "foundry32"
-version = "2.0.0"
+version = "2.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,6 +22,8 @@ winapi = { version = "0.3.9", features = [
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 minreq = { version = "2", features = ["https-native"] }
+# Raw (unexpanded) reads/writes of HKCU\Environment for PATH exposure.
+winreg = "0.52"
 
 [build-dependencies]
 embed-resource = "2"

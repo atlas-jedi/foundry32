@@ -37,10 +37,15 @@ pub fn tool_exe(id: &str, exe: &str) -> PathBuf {
     tool_dir(id).join(exe)
 }
 
-/// Temp file a download streams into before it is verified and committed.
-pub fn tmp_path(id: &str) -> PathBuf {
-    tool_dir(id).join(".download.tmp")
+/// Temp file a download streams into before it is verified and committed. One
+/// per artifact, since a tool may ship several binaries (`exe` is validated as
+/// a plain file name by the catalog parser, so it can't escape the directory).
+pub fn tmp_path_for(id: &str, exe: &str) -> PathBuf {
+    tool_dir(id).join(format!("{TMP_PREFIX}{exe}{TMP_SUFFIX}"))
 }
+
+const TMP_PREFIX: &str = ".download.";
+const TMP_SUFFIX: &str = ".tmp";
 
 pub fn installed_json_path() -> PathBuf {
     app_root().join("installed.json")
@@ -51,14 +56,18 @@ pub fn registry_cache_path() -> PathBuf {
     app_root().join("registry.cache.json")
 }
 
-/// Deletes leftover `.download.tmp` files from interrupted installs. Called at
+/// Deletes leftover `.download.*.tmp` files from interrupted installs. Called at
 /// startup and before each install so a crash never strands a partial download.
 pub fn sweep_stale_tmp() {
-    let Ok(entries) = std::fs::read_dir(install_root()) else { return };
-    for entry in entries.flatten() {
-        let tmp = entry.path().join(".download.tmp");
-        if tmp.exists() {
-            let _ = std::fs::remove_file(tmp);
+    let Ok(tool_dirs) = std::fs::read_dir(install_root()) else { return };
+    for tool_dir in tool_dirs.flatten() {
+        let Ok(files) = std::fs::read_dir(tool_dir.path()) else { continue };
+        for file in files.flatten() {
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(TMP_PREFIX) && name.ends_with(TMP_SUFFIX) {
+                let _ = std::fs::remove_file(file.path());
+            }
         }
     }
 }

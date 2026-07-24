@@ -61,6 +61,7 @@ const GLYPH_AVAILABLE: u16 = 0xE896; // download
 const GLYPH_UNAVAILABLE: u16 = 0xE785; // lock
 /// Per-tool icon glyphs.
 const GLYPH_CONSOLE: u16 = 0xE756; // command prompt
+const GLYPH_SEARCH: u16 = 0xE721; // magnifier
 const GLYPH_TOOL: u16 = 0xE74C; // generic component
 
 /// Fluent state colors as (r, g, b).
@@ -796,9 +797,14 @@ impl HubApp {
             return;
         }
         let tr = self.tr();
+        let mut body = tr.confirm_uninstall_body.replace("%S", &view.entry.name);
+        if view.entry.expose_on_path {
+            body.push_str("\r\n");
+            body.push_str(tr.confirm_uninstall_path);
+        }
         let choice = nwg::modal_message(&self.window.handle, &nwg::MessageParams {
             title: tr.confirm_uninstall_title,
-            content: &tr.confirm_uninstall_body.replace("%S", &view.entry.name),
+            content: &body,
             buttons: nwg::MessageButtons::YesNo,
             icons: nwg::MessageIcons::Warning,
         });
@@ -1169,6 +1175,7 @@ fn card_status(view: &ToolView, tr: &T) -> (u16, (u8, u8, u8), &'static str) {
 fn tool_glyph(id: &str) -> (u16, (u8, u8, u8)) {
     match id {
         "mcp-console" => (GLYPH_CONSOLE, COLOR_OK),
+        "witn" => (GLYPH_SEARCH, COLOR_OK),
         _ => (GLYPH_TOOL, COLOR_ACCENT),
     }
 }
@@ -1211,9 +1218,11 @@ fn details_text(view: &ToolView, lang: Lang, tr: &T) -> String {
         format!("{}: {}", tr.d_installed, installed),
         format!("{}: {}", tr.d_homepage, view.entry.homepage),
         format!("{}: {}", tr.d_path, path),
-        String::new(),
-        description.clone(),
     ];
+    if view.entry.expose_on_path {
+        lines.push(format!("{}: {}", tr.d_on_path, tr.d_on_path_yes));
+    }
+    lines.extend([String::new(), description.clone()]);
     if description.is_empty() {
         lines.pop();
     }
