@@ -1,7 +1,8 @@
 # WITN (Where Is The Node?) — a Foundry32 tool. One engine crate, two thin
-# front-ends built from it: `witn.exe` (console, goes on PATH — the CLI) and,
-# from Phase 3, `witn-gui.exe` (GUI, launched by the hub). The two-binary split
-# is a Windows-subsystem necessity, not a preference — see src/lib.rs.
+# front-ends built from it: `witn.exe` (console, goes on PATH — the CLI) and
+# `witn-gui.exe` (GUI, launched by the hub). The two-binary split is a Windows-
+# subsystem necessity, not a preference — see src/lib.rs. native-windows-gui is
+# a dependency of the package but is only linked by the GUI binary.
 [package]
 name = "witn"
 version = "0.1.0"
@@ -11,9 +12,17 @@ repository.workspace = true
 description = "Where Is The Node? — find, inspect and manage node.exe processes (which app, which path, which port) from a GUI or the `witn` CLI."
 
 [dependencies]
+foundry-common = { path = "../foundry-common" }
 serde_json = "1"
 winapi = { version = "0.3.9", features = [
     "tlhelp32", "processthreadsapi", "handleapi", "winbase", "psapi",
     "sysinfoapi", "winnt", "errhandlingapi", "iphlpapi", "tcpmib", "ws2def",
-    "winerror", "libloaderapi", "wow64apiset",
+    "winerror", "libloaderapi", "wow64apiset", "winuser", "commctrl",
 ] }
+native-windows-gui = { version = "1.0.13", features = [
+    "list-view", "notice", "status-bar", "message-window", "menu",
+    "embed-resource", "high-dpi", "cursor", "tooltip",
+] }
+
+[build-dependencies]
+embed-resource = "2"

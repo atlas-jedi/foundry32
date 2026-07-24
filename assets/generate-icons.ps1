@@ -1,7 +1,8 @@
-# Deterministic icon generator for the Foundry32 workspace. Produces two
+# Deterministic icon generator for the Foundry32 workspace. Produces three
 # multi-resolution .ico files with distinct classic-flavored motifs:
 #   Foundry32   -> a hot anvil (the forge/foundry)
 #   MCP Console -> a ">_" terminal prompt
+#   WITN        -> a magnifier over a node hexagon (finding the node)
 # Run from anywhere: powershell -ExecutionPolicy Bypass -File assets\generate-icons.ps1
 Add-Type -AssemblyName System.Drawing
 
@@ -69,6 +70,45 @@ $DrawConsole = {
     $cursor.Dispose()
 }
 
+# WITN: a node hexagon under a magnifier. The glass is stroked twice — once in
+# the plate colour, then in white — so its ring stays readable where it crosses
+# the hexagon, down to 16 px.
+$DrawWitn = {
+    param($g, [float]$s)
+    Draw-Plate $g $s (Argb 255 20 28 30)
+
+    $hex = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $cx = 0.44; $cy = 0.42; $r = 0.26
+    $poly = foreach ($angle in 90, 150, 210, 270, 330, 30) {
+        $rad = $angle * [Math]::PI / 180
+        New-Object System.Drawing.PointF(
+            (($cx + $r * [Math]::Cos($rad)) * $s),
+            (($cy - $r * [Math]::Sin($rad)) * $s))
+    }
+    $hex.AddPolygon([System.Drawing.PointF[]]$poly)
+    $green = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+        (New-Object System.Drawing.PointF(0, ($s * 0.16))),
+        (New-Object System.Drawing.PointF(0, ($s * 0.68))),
+        (Argb 255 138 220 130), (Argb 255 74 166 92))
+    $g.FillPath($green, $hex)
+    $green.Dispose(); $hex.Dispose()
+
+    $glassBox = New-Object System.Drawing.RectangleF(
+        ($s * 0.42), ($s * 0.40), ($s * 0.36), ($s * 0.36))
+    $handleFrom = New-Object System.Drawing.PointF(($s * 0.735), ($s * 0.735))
+    $handleTo = New-Object System.Drawing.PointF(($s * 0.88), ($s * 0.88))
+    foreach ($stroke in @(
+            @{ color = (Argb 255 20 28 30); width = 0.135 },
+            @{ color = (Argb 255 244 248 250); width = 0.065 })) {
+        $pen = New-Object System.Drawing.Pen($stroke.color, ($s * $stroke.width))
+        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $g.DrawEllipse($pen, $glassBox)
+        $g.DrawLine($pen, $handleFrom, $handleTo)
+        $pen.Dispose()
+    }
+}
+
 function Save-Ico([string]$outPath, $drawMotif) {
     $sizes = 16, 24, 32, 48, 64, 256
     $pngs = foreach ($size in $sizes) {
@@ -104,3 +144,4 @@ function Save-Ico([string]$outPath, $drawMotif) {
 $root = Split-Path $PSScriptRoot -Parent
 Save-Ico (Join-Path $root 'crates\foundry32\assets\foundry32.ico') $DrawFoundry
 Save-Ico (Join-Path $root 'crates\mcp-console\assets\mcp-console.ico') $DrawConsole
+Save-Ico (Join-Path $root 'crates\witn\assets\witn.ico') $DrawWitn

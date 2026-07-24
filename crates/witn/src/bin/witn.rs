@@ -5,9 +5,13 @@
 //! `witn-gui.exe` exists (Phase 3); for now it prints help.
 
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 
 use witn::model::{format_uptime, NodeProc};
 use witn::{proctree, tree, Scanner};
+
+/// Detaches a launched GUI from this console so the terminal returns immediately.
+const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,7 +21,7 @@ fn main() {
         Some("kill") => cmd_kill(&args[2..]),
         Some("--dump") => cmd_dump(args.get(2).map(String::as_str)),
         Some("--help") | Some("-h") => print_help(),
-        None => print_help(), // Phase 3: launch the GUI
+        None => launch_gui(),
         Some(other) => {
             eprintln!("witn: comando desconhecido '{other}'\n");
             print_help();
@@ -185,6 +189,23 @@ fn cmd_dump(path: Option<&str>) {
     match std::fs::write(out_path, &report) {
         Ok(()) => println!("witn: dump gravado em {out_path} ({} processos)", forest.len()),
         Err(e) => eprintln!("witn: falha ao gravar {out_path}: {e}"),
+    }
+}
+
+/// `witn` with no arguments opens the GUI. `witn-gui.exe` lives next to this
+/// exe (same tool dir); launch it detached so the terminal isn't held, and fall
+/// back to help if it isn't there (e.g. running the console exe in isolation).
+fn launch_gui() {
+    let gui = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("witn-gui.exe")));
+    match gui {
+        Some(path) if path.exists() => {
+            let _ = std::process::Command::new(&path)
+                .creation_flags(DETACHED_PROCESS)
+                .spawn();
+        }
+        _ => print_help(),
     }
 }
 
