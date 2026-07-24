@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/foundry-common", "crates/foundry32", "crates/mcp-console"]
+members = ["crates/foundry-common", "crates/foundry32", "crates/mcp-console", "crates/witn"]
 
 # Common metadata inherited by member crates via `field.workspace = true`.
 # NOTE: `version` is intentionally NOT here — each crate carries its own

@@ -1,0 +1,19 @@
+# WITN (Where Is The Node?) — a Foundry32 tool. One engine crate, two thin
+# front-ends built from it: `witn.exe` (console, goes on PATH — the CLI) and,
+# from Phase 3, `witn-gui.exe` (GUI, launched by the hub). The two-binary split
+# is a Windows-subsystem necessity, not a preference — see src/lib.rs.
+[package]
+name = "witn"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Where Is The Node? — find, inspect and manage node.exe processes (which app, which path, which port) from a GUI or the `witn` CLI."
+
+[dependencies]
+serde_json = "1"
+winapi = { version = "0.3.9", features = [
+    "tlhelp32", "processthreadsapi", "handleapi", "winbase", "psapi",
+    "sysinfoapi", "winnt", "errhandlingapi", "iphlpapi", "tcpmib", "ws2def",
+    "winerror", "libloaderapi", "wow64apiset",
+] }
