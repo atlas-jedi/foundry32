@@ -11,7 +11,9 @@ use crate::model::{McpServer, Scope, Transport};
 use crate::mutation::{self, ServerDraft};
 use crate::settings::AppSettings;
 use foundry_common::theme::{apply_explorer_theme, create_glyph_icon};
-use foundry_common::ui::{insert_report_list_view_column, set_menu_item_text, set_submenu_text};
+use foundry_common::ui::{
+    apply_window_icon, insert_report_list_view_column, set_menu_item_text, set_submenu_text,
+};
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -230,12 +232,8 @@ fn build_app(settings: AppSettings) -> ConsoleApp {
     let mut notice = nwg::Notice::default();
     nwg::Notice::builder().parent(&window).build(&mut notice).expect("notice");
 
-    // Window icon from embedded resource id 1 (absent on plain GNU dev builds).
-    if let Ok(embed) = nwg::EmbedResource::load(None) {
-        if let Some(icon) = embed.icon(1, None) {
-            window.set_icon(Some(&icon));
-        }
-    }
+    // Title bar, taskbar and Alt+Tab icons (absent on plain GNU dev builds).
+    apply_window_icon(&window.handle);
 
     mi_edit.set_enabled(false);
     mi_remove.set_enabled(false);

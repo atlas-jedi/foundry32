@@ -7,4 +7,4 @@ description = "Shared Win32 helpers for the Foundry32 workspace: hidden process 
 
 [dependencies]
 native-windows-gui = { version = "1.0.13", features = ["list-view", "menu", "high-dpi"] }
-winapi = { version = "0.3.9", features = ["winnls", "winuser", "commctrl", "uxtheme", "wingdi"] }
+winapi = { version = "0.3.9", features = ["winnls", "winuser", "commctrl", "uxtheme", "wingdi", "libloaderapi"] }

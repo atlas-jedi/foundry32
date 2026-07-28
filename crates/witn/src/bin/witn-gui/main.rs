@@ -14,9 +14,12 @@ mod i18n;
 use i18n::{detect_system_lang, t, Lang, T};
 
 use foundry_common::theme::{apply_classic_button_theme, apply_explorer_theme};
-use foundry_common::ui::insert_report_list_view_column;
+use foundry_common::ui::{
+    apply_window_icon, insert_report_list_view_column, set_list_view_sort_indicator,
+};
 use native_windows_gui as nwg;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -26,6 +29,16 @@ use std::time::Duration;
 
 use witn::model::{format_uptime, NodeProc};
 use witn::{appname, proctree, tree, Scanner};
+
+// Column indices, in the order they are inserted into the list view.
+const COL_APP: usize = 0;
+const COL_PID: usize = 1;
+const COL_PPID: usize = 2;
+const COL_PORTS: usize = 3;
+const COL_CPU: usize = 4;
+const COL_RAM: usize = 5;
+const COL_UPTIME: usize = 6;
+const COL_PATH: usize = 7;
 
 const MARGIN: i32 = 8;
 const BUTTON_W: i32 = 120;
@@ -53,7 +66,15 @@ struct Shared {
 
 struct UiState {
     lang: Lang,
+    /// The scan result in tree order (each parent followed by its children) —
+    /// the source of truth. `order` alone decides how it is displayed.
     procs: Vec<NodeProc>,
+    /// Indices into `procs`, in display order.
+    order: Vec<usize>,
+    /// Column the list is sorted by and whether it is descending; `None` is
+    /// the default process tree.
+    sort: Option<(usize, bool)>,
+    /// Index into `procs` (not into the displayed rows) of the selection.
     selected: Option<usize>,
     paused: bool,
 }
@@ -177,12 +198,8 @@ fn build_app(lang: Lang, cmd_tx: Sender<Cmd>) -> WitnApp {
     let mut notice = nwg::Notice::default();
     nwg::Notice::builder().parent(&window).build(&mut notice).expect("notice");
 
-    // Window icon from embedded resource id 1 (absent on plain GNU dev builds).
-    if let Ok(embed) = nwg::EmbedResource::load(None) {
-        if let Some(icon) = embed.icon(1, None) {
-            window.set_icon(Some(&icon));
-        }
-    }
+    // Title bar, taskbar and Alt+Tab icons (absent on plain GNU dev builds).
+    apply_window_icon(&window.handle);
 
     btn_kill.set_enabled(false);
     btn_open.set_enabled(false);
@@ -196,7 +213,14 @@ fn build_app(lang: Lang, cmd_tx: Sender<Cmd>) -> WitnApp {
         btn_open,
         status_bar,
         notice,
-        state: RefCell::new(UiState { lang, procs: Vec::new(), selected: None, paused: false }),
+        state: RefCell::new(UiState {
+            lang,
+            procs: Vec::new(),
+            order: Vec::new(),
+            sort: None,
+            selected: None,
+            paused: false,
+        }),
         shared: Arc::new(Mutex::new(Shared::default())),
         cmd_tx,
     }
@@ -226,6 +250,11 @@ fn wire_events(app: &Rc<WitnApp>) {
             E::OnKeyRelease => {
                 if let nwg::EventData::OnKey(VK_F5) = evt_data {
                     let _ = app.cmd_tx.send(Cmd::Scan);
+                }
+            }
+            E::OnListViewColumnClick if handle == app.listview.handle => {
+                if let nwg::EventData::OnListViewItemIndex { column_index, .. } = evt_data {
+                    app.cycle_sort(column_index);
                 }
             }
             E::OnListViewItemChanged | E::OnListViewClick if handle == app.listview.handle => {
@@ -271,21 +300,66 @@ impl WitnApp {
     fn drain(&self) {
         let result = self.shared.lock().unwrap().result.take();
         if let Some(procs) = result {
-            {
-                let mut state = self.state.borrow_mut();
-                state.procs = procs;
-                state.selected = None;
-            }
+            self.state.borrow_mut().procs = procs;
+            self.reorder();
             self.populate();
         }
+    }
+
+    /// Cycles a column the way a click on its header should: ascending, then
+    /// descending, then back to the process tree.
+    ///
+    /// Sorting flattens the tree — a list ordered by CPU cannot also keep every
+    /// child under its parent — so that third click is the only way back to the
+    /// hierarchy.
+    fn cycle_sort(&self, column: usize) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.sort = match state.sort {
+                Some((sorted, false)) if sorted == column => Some((column, true)),
+                Some((sorted, true)) if sorted == column => None,
+                _ => Some((column, false)),
+            };
+        }
+        self.reorder();
+        self.populate();
+    }
+
+    /// Rebuilds the display order from the current sort. `procs` itself is
+    /// never reordered, so a row's index into it (what `selected` holds) stays
+    /// valid across sorts.
+    fn reorder(&self) {
+        let mut state = self.state.borrow_mut();
+        let mut order: Vec<usize> = (0..state.procs.len()).collect();
+        if let Some((column, descending)) = state.sort {
+            let procs = &state.procs;
+            order.sort_by(|&a, &b| {
+                let ordering = compare_by_column(&procs[a], &procs[b], column);
+                if descending {
+                    ordering.reverse()
+                } else {
+                    ordering
+                }
+            });
+        }
+        state.order = order;
     }
 
     fn populate(&self) {
         self.listview.clear();
         {
             let state = self.state.borrow();
-            for p in &state.procs {
-                let name = format!("{}{}", "  ".repeat(p.depth), p.app_name);
+            let flattened = state.sort.is_some();
+            for &index in &state.order {
+                let Some(p) = state.procs.get(index) else { continue };
+                // Only the tree view indents: under a sort, the row above is no
+                // longer the parent, so indentation would claim a relationship
+                // the order does not reflect.
+                let name = if flattened {
+                    p.app_name.clone()
+                } else {
+                    format!("{}{}", "  ".repeat(p.depth), p.app_name)
+                };
                 let row = [
                     name,
                     p.pid.to_string(),
@@ -298,19 +372,25 @@ impl WitnApp {
                 ];
                 self.listview.insert_items_row(None, &row);
             }
+            set_list_view_sort_indicator(&self.listview, state.sort.map(|(c, d)| (c as i32, d)));
         }
+        self.state.borrow_mut().selected = None;
         self.btn_kill.set_enabled(false);
         self.btn_open.set_enabled(false);
         self.update_status();
     }
 
     fn select_row(&self, row: usize) {
-        let valid = row < self.state.borrow().procs.len();
-        if valid {
-            self.state.borrow_mut().selected = Some(row);
-        }
-        self.btn_kill.set_enabled(valid);
-        self.btn_open.set_enabled(valid);
+        // Refilling the list makes Windows emit selection changes of its own.
+        // Those land while `populate` still holds the state borrowed — and it
+        // clears the selection right after — so dropping them is both safe and
+        // the behavior we want.
+        let Ok(mut state) = self.state.try_borrow_mut() else { return };
+        let selected = state.order.get(row).copied();
+        state.selected = selected;
+        drop(state);
+        self.btn_kill.set_enabled(selected.is_some());
+        self.btn_open.set_enabled(selected.is_some());
     }
 
     fn toggle_pause(&self) {
@@ -398,9 +478,56 @@ impl WitnApp {
             } else {
                 tr.status_live.replace("%S", &REFRESH_SECS.to_string())
             };
-            format!("{left}   ·   {mode}")
+            let mut text = format!("{left}   ·   {mode}");
+            if let Some((column, descending)) = state.sort {
+                let sorted = tr
+                    .status_sorted
+                    .replace("%C", column_title(tr, column))
+                    .replace("%D", if descending { "↓" } else { "↑" });
+                text.push_str(&format!("   ·   {sorted}"));
+            }
+            text
         };
         self.status_bar.set_text(0, &text);
+    }
+}
+
+/// Orders two processes by what a given column shows. Every column falls back
+/// to the PID so equal values keep a stable, reproducible order between scans.
+fn compare_by_column(a: &NodeProc, b: &NodeProc, column: usize) -> Ordering {
+    let by_pid = a.pid.cmp(&b.pid);
+    match column {
+        COL_APP => a.app_name.to_lowercase().cmp(&b.app_name.to_lowercase()).then(by_pid),
+        COL_PID => by_pid,
+        COL_PPID => a.ppid.cmp(&b.ppid).then(by_pid),
+        COL_PORTS => port_key(a).cmp(&port_key(b)).then(by_pid),
+        COL_CPU => a.cpu_percent.total_cmp(&b.cpu_percent).then(by_pid),
+        COL_RAM => a.mem_bytes.cmp(&b.mem_bytes).then(by_pid),
+        COL_UPTIME => a.uptime_secs.cmp(&b.uptime_secs).then(by_pid),
+        COL_PATH => app_path(a).to_lowercase().cmp(&app_path(b).to_lowercase()).then(by_pid),
+        _ => by_pid,
+    }
+}
+
+/// Sorts by the lowest listening port, with the processes that listen on none
+/// pushed to the end of the ascending order — those are never what someone
+/// sorting by port is looking for.
+fn port_key(p: &NodeProc) -> (bool, u16) {
+    (p.ports.is_empty(), p.ports.first().copied().unwrap_or(0))
+}
+
+/// The header caption of a column, for the status bar's sort indicator.
+fn column_title(tr: &'static T, column: usize) -> &'static str {
+    match column {
+        COL_APP => tr.col_app,
+        COL_PID => tr.col_pid,
+        COL_PPID => tr.col_ppid,
+        COL_PORTS => tr.col_ports,
+        COL_CPU => tr.col_cpu,
+        COL_RAM => tr.col_ram,
+        COL_UPTIME => tr.col_uptime,
+        COL_PATH => tr.col_path,
+        _ => "",
     }
 }
 

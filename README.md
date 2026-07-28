@@ -35,7 +35,7 @@ as an offline fallback.
 | Tool | What it does |
 |---|---|
 | **MCP Console** | See and manage every MCP server your [Claude Code](https://code.claude.com) install knows about — with a clear answer to *"if I change this here, does it change on my other computers too?"* Labels each server's reach (account / machine / project), shows health, and edits the file-based ones via the official `claude mcp` CLI (never by hand-editing `~/.claude.json`). Env var **names** shown, values never read. |
-| **WITN** | *Where Is The Node?* — answers "which of these twenty `node.exe` is holding port 3000?" Lists every Node process grouped as a tree, naming the **app** behind it (project from its `package.json`, script or tool from its command line), with its folder, listening ports, RAM, CPU and uptime. Ends a whole process tree in one click, and opens the app's folder in Explorer. Also installs a `witn` CLI **on your PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
+| **WITN** | *Where Is The Node?* — answers "which of these twenty `node.exe` is holding port 3000?" Lists every Node process grouped as a tree, naming the **app** behind it (project from its `package.json`, script or tool from its command line), with its folder, listening ports, RAM, CPU and uptime. Click any column header to sort by it (ascending, descending, then back to the tree). Ends a whole process tree in one click, and opens the app's folder in Explorer. Also installs a `witn` CLI **on your PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
 
 More tools land in the catalog over time — the hub picks them up without needing
 a new Foundry32 build.

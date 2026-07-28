@@ -1,8 +1,12 @@
 //! Small Win32 shims that native-windows-gui lacks or gets wrong: in-place menu
-//! caption updates (for runtime language switching) and a report-view list
-//! column insert that sidesteps an nwg bug. Self-contained (nwg + winapi only).
+//! caption updates (for runtime language switching), a report-view list column
+//! insert that sidesteps an nwg bug, the window icon nwg only half-sets, and
+//! list-view header sort arrows. Self-contained (nwg + winapi only).
 
 use native_windows_gui as nwg;
+
+/// Resource id of the app icon in every crate's `app.rc` (`1 ICON "…"`).
+const APP_ICON_RESOURCE_ID: u16 = 1;
 
 /// Updates a menu item's caption in place (nwg has no set_text for menu items).
 pub fn set_menu_item_text(item: &nwg::MenuItem, text: &str) {
@@ -71,5 +75,94 @@ pub fn insert_report_list_view_column(listview: &nwg::ListView, index: i32, widt
 
     unsafe {
         SendMessageW(handle, LVM_INSERTCOLUMNW, index as usize, &mut column as *mut LVCOLUMNW as isize);
+    }
+}
+
+/// Gives a window both icon sizes Windows actually asks for.
+///
+/// `nwg::Window::set_icon` sends `WM_SETICON` with `wParam = 0` — that is
+/// `ICON_SMALL`, the title-bar icon — and never sets `ICON_BIG`; the window
+/// class nwg registers carries `hIcon: null` too. The taskbar button and
+/// Alt+Tab ask for `ICON_BIG`, find nothing, and fall back to a generic icon,
+/// which is why the app looks right in its own title bar and wrong on the
+/// taskbar. This loads the embedded app icon at each metric's own size and
+/// sets both, plus the class icons, so dialogs created later inherit them.
+///
+/// Does nothing when the icon resource is absent — plain GNU dev builds skip
+/// the resource compile, so the icon only shows up in release (MSVC) builds.
+pub fn apply_window_icon(handle: &nwg::ControlHandle) {
+    use winapi::shared::windef::HICON;
+    use winapi::um::libloaderapi::GetModuleHandleW;
+    use winapi::um::winuser::{
+        GetSystemMetrics, LoadImageW, SendMessageW, SetClassLongPtrW, GCLP_HICON, GCLP_HICONSM,
+        ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MAKEINTRESOURCEW, SM_CXICON,
+        SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
+    };
+
+    let Some(hwnd) = handle.hwnd() else { return };
+    unsafe {
+        // LR_SHARED: the system caches and owns these handles, so nothing here
+        // has to be destroyed — and repeated calls hand back the same icons.
+        let load = |cx, cy| {
+            LoadImageW(
+                GetModuleHandleW(std::ptr::null()),
+                MAKEINTRESOURCEW(APP_ICON_RESOURCE_ID),
+                IMAGE_ICON,
+                GetSystemMetrics(cx),
+                GetSystemMetrics(cy),
+                LR_DEFAULTCOLOR | LR_SHARED,
+            ) as HICON
+        };
+        let big = load(SM_CXICON, SM_CYICON);
+        let small = load(SM_CXSMICON, SM_CYSMICON);
+        if big.is_null() && small.is_null() {
+            return;
+        }
+        for (which, icon) in [(ICON_BIG, big), (ICON_SMALL, small)] {
+            if !icon.is_null() {
+                SendMessageW(hwnd, WM_SETICON, which as usize, icon as isize);
+            }
+        }
+        for (which, icon) in [(GCLP_HICON, big), (GCLP_HICONSM, small)] {
+            if !icon.is_null() {
+                SetClassLongPtrW(hwnd, which, icon as isize as _);
+            }
+        }
+    }
+}
+
+/// Draws (or clears) the sort arrow on a report list view's header, the way
+/// Explorer marks the column a list is ordered by.
+///
+/// `sort` is the zero-based column and whether the order is descending;
+/// `None` clears every column's arrow.
+pub fn set_list_view_sort_indicator(listview: &nwg::ListView, sort: Option<(i32, bool)>) {
+    use winapi::um::commctrl::{
+        HDF_SORTDOWN, HDF_SORTUP, HDITEMW, HDI_FORMAT, HDM_GETITEMCOUNT, HDM_GETITEMW,
+        HDM_SETITEMW, LVM_GETHEADER,
+    };
+    use winapi::um::winuser::SendMessageW;
+
+    let Some(handle) = listview.handle.hwnd() else { return };
+    unsafe {
+        let header = SendMessageW(handle, LVM_GETHEADER, 0, 0) as winapi::shared::windef::HWND;
+        if header.is_null() {
+            return;
+        }
+        let count = SendMessageW(header, HDM_GETITEMCOUNT, 0, 0) as i32;
+        for column in 0..count {
+            let mut item: HDITEMW = std::mem::zeroed();
+            item.mask = HDI_FORMAT;
+            if SendMessageW(header, HDM_GETITEMW, column as usize, &mut item as *mut HDITEMW as isize) == 0 {
+                continue;
+            }
+            item.fmt &= !(HDF_SORTUP | HDF_SORTDOWN);
+            if let Some((sorted_column, descending)) = sort {
+                if sorted_column == column {
+                    item.fmt |= if descending { HDF_SORTDOWN } else { HDF_SORTUP };
+                }
+            }
+            SendMessageW(header, HDM_SETITEMW, column as usize, &mut item as *mut HDITEMW as isize);
+        }
     }
 }

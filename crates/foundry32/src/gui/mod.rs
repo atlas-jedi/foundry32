@@ -16,7 +16,7 @@ use crate::settings::AppSettings;
 use crate::update_check::{self, UpdateInfo};
 use crate::{download, engine, paths};
 use foundry_common::theme::{apply_classic_button_theme, apply_classic_theme, create_glyph_icon};
-use foundry_common::ui::{set_menu_item_text, set_submenu_text};
+use foundry_common::ui::{apply_window_icon, set_menu_item_text, set_submenu_text};
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -321,11 +321,8 @@ fn build_app(settings: AppSettings) -> HubApp {
     let mut notice = nwg::Notice::default();
     nwg::Notice::builder().parent(&window).build(&mut notice).expect("notice");
 
-    if let Ok(embed) = nwg::EmbedResource::load(None) {
-        if let Some(icon) = embed.icon(1, None) {
-            window.set_icon(Some(&icon));
-        }
-    }
+    // Title bar, taskbar and Alt+Tab icons (absent on plain GNU dev builds).
+    apply_window_icon(&window.handle);
 
     HubApp {
         window,
