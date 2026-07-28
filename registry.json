@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "registry_version": 2,
+  "registry_version": 3,
   "tools": [
     {
       "id": "mcp-console",
@@ -8,9 +8,9 @@
       "publisher": "Software Imperial",
       "description_en": "Inspect and manage the MCP servers your Claude Code install knows about, with clear account-level vs machine-local vs project scope.",
       "description_pt": "Inspecione e gerencie os servidores MCP que sua instalação do Claude Code conhece, com escopo claro (conta, máquina ou projeto).",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "exe": "mcp-console.exe",
-      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v1.0.0/mcp-console.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.1/mcp-console.exe",
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32"
@@ -21,16 +21,16 @@
       "publisher": "Software Imperial",
       "description_en": "Where Is The Node? Shows which app every node.exe on the machine belongs to — project, path, listening ports, RAM, CPU — and ends a whole process tree in one click. Ships the witn CLI on your PATH.",
       "description_pt": "Where Is The Node? Mostra a qual app pertence cada node.exe da máquina — projeto, caminho, portas em escuta, RAM, CPU — e encerra a árvore inteira num clique. Inclui o CLI witn no seu PATH.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "exe": "witn-gui.exe",
-      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.0/witn-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.1/witn-gui.exe",
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32",
       "companions": [
         {
           "exe": "witn.exe",
-          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.0/witn.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.1/witn.exe",
           "sha256": "",
           "size_bytes": 0
         }
