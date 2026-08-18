@@ -18,6 +18,7 @@ pub const GUIDE_PT: &str = include_str!("../assets/format-guide.pt.md");
 /// The format contract `jafiz format` prints (en).
 pub const GUIDE_EN: &str = include_str!("../assets/format-guide.en.md");
 
+/// How serious a diagnostic is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
     /// The suite cannot be executed as written.
@@ -27,6 +28,7 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// The word `jafiz check` prints next to a diagnostic of this severity.
     pub fn label(&self) -> &'static str {
         match self {
             Severity::Error => "erro",
@@ -35,6 +37,7 @@ impl Severity {
     }
 }
 
+/// One problem the parser noticed while reading the suite.
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
     /// 1-based line in the source file; 0 when the problem is the file itself.
@@ -43,12 +46,14 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+/// A suite as parsed, plus everything the parser noticed about the source text.
 pub struct ParseOutcome {
     pub suite: Suite,
     pub diagnostics: Vec<Diagnostic>,
 }
 
 impl ParseOutcome {
+    /// True when at least one diagnostic is `Severity::Error`.
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|d| d.severity == Severity::Error)
     }
@@ -62,6 +67,8 @@ enum Section {
     Steps,
 }
 
+/// Parses `text` into a `Suite`. Never fails outright — anything the format
+/// can't make sense of becomes a diagnostic instead (see the module doc).
 pub fn parse(path: &Path, text: &str) -> ParseOutcome {
     let stem = path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().to_string());
     let mut suite = Suite {
@@ -231,6 +238,7 @@ pub fn parse(path: &Path, text: &str) -> ParseOutcome {
     ParseOutcome { suite, diagnostics }
 }
 
+/// Reads `path` from disk, then parses it.
 pub fn parse_file(path: &Path) -> std::io::Result<ParseOutcome> {
     let text = std::fs::read_to_string(path)?;
     Ok(parse(path, &text))
