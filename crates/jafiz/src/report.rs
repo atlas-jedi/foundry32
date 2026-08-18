@@ -25,6 +25,7 @@ struct T {
     steps: &'static str,
     scenarios_word: &'static str,
     scenarios_ok: &'static str,
+    scenarios_skipped: &'static str,
     failed: &'static str,
     blocked: &'static str,
     step_word: &'static str,
@@ -52,6 +53,7 @@ static PT: T = T {
     steps: "passos",
     scenarios_word: "cenários",
     scenarios_ok: "%N cenários OK",
+    scenarios_skipped: "%N pulado",
     failed: "%N falhou",
     blocked: "%N bloqueado",
     step_word: "Passo",
@@ -79,6 +81,7 @@ static EN: T = T {
     steps: "steps",
     scenarios_word: "scenarios",
     scenarios_ok: "%N scenarios OK",
+    scenarios_skipped: "%N skipped",
     failed: "%N failed",
     blocked: "%N blocked",
     step_word: "Step",
@@ -158,6 +161,9 @@ pub fn progress_line(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
         .replace("%T", &counts.total_steps.to_string())];
     if counts.scenarios_pass > 0 {
         parts.push(tr.scenarios_ok.replace("%N", &counts.scenarios_pass.to_string()));
+    }
+    if counts.scenarios_skipped > 0 {
+        parts.push(tr.scenarios_skipped.replace("%N", &counts.scenarios_skipped.to_string()));
     }
     if counts.scenarios_fail > 0 {
         parts.push(tr.failed.replace("%N", &counts.scenarios_fail.to_string()));

@@ -272,6 +272,10 @@ pub struct Tally {
     pub blocked: usize,
     pub skip: usize,
     pub scenarios_pass: usize,
+    /// Scenarios whose every step was skipped. Kept apart from `scenarios_pass`
+    /// because such a scenario rolls up to `Pass` (a skip counts as decided)
+    /// yet nobody actually tested it.
+    pub scenarios_skipped: usize,
     pub scenarios_fail: usize,
     pub scenarios_blocked: usize,
     pub scenarios_pending: usize,
@@ -336,7 +340,22 @@ pub fn tally(suite: &Suite, run: Option<&Run>) -> Tally {
             }
         }
         match scenario_status(scenario, run) {
-            ScenarioStatus::Pass => t.scenarios_pass += 1,
+            // An all-skipped scenario also rolls up to `Pass`, but counting it
+            // as OK would overstate the run in the one line a reader trusts
+            // most. A step-less scenario is not "all skipped" — it is empty.
+            ScenarioStatus::Pass => {
+                let all_skipped = !scenario.steps.is_empty()
+                    && scenario.steps.iter().all(|step| {
+                        run.is_some_and(|r| {
+                            r.status_of(&scenario.id, step.number) == StepStatus::Skip
+                        })
+                    });
+                if all_skipped {
+                    t.scenarios_skipped += 1;
+                } else {
+                    t.scenarios_pass += 1;
+                }
+            }
             ScenarioStatus::Fail => t.scenarios_fail += 1,
             ScenarioStatus::Blocked => t.scenarios_blocked += 1,
             ScenarioStatus::Pending | ScenarioStatus::Running => t.scenarios_pending += 1,
