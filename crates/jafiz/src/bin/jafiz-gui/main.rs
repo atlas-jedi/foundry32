@@ -1220,7 +1220,13 @@ impl JafizApp {
                 None => format!("{stem}.md"),
             };
             (
-                state.location.clone(),
+                // Deliberately NOT `state.location`: that is the suite folder,
+                // and `store::list_suites` reads every `.md` it finds there as
+                // a suite. A report saved next to the suite is picked back up
+                // on the next launch and shows up in the suite picker — and in
+                // `jafiz list` — as though it were a real one. Documents is a
+                // default a tester saving a report is not likely to mind.
+                documents_dir(),
                 suggested,
                 tr.menu_report_save.trim_end_matches('…'),
                 [tr.filter_md, tr.filter_all],
@@ -1338,6 +1344,28 @@ impl JafizApp {
             nwg::modal_error_message(&self.window.handle, self.tr().app_title, &error);
         }
         self.relabel_all();
+    }
+}
+
+/// The Save-as dialog's default folder: the user's Documents, resolved the
+/// same way the rest of the workspace resolves user folders — through
+/// `std::env` rather than `SHGetKnownFolderPath` — so this stays free of a
+/// new dependency (compare `store::library_dir`, which reads `LOCALAPPDATA`
+/// with a `USERPROFILE`-based fallback the same way).
+///
+/// Returns an empty path when `USERPROFILE` is not set at all; `save_file_dialog`
+/// already treats a non-directory `folder` as "no default", so that is enough
+/// to leave the dialog with whatever folder Windows last remembered.
+fn documents_dir() -> PathBuf {
+    let Ok(profile) = std::env::var("USERPROFILE") else {
+        return PathBuf::new();
+    };
+    let profile = PathBuf::from(profile);
+    let documents = profile.join("Documents");
+    if documents.is_dir() {
+        documents
+    } else {
+        profile
     }
 }
 
