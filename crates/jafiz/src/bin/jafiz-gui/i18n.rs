@@ -7,14 +7,15 @@
 // directly and an unused re-export is a hard error under `-D warnings`.
 pub use foundry_common::lang::Lang;
 
-// The window is built in layers, so a handful of fields below carry their own
-// `#[allow(dead_code)]`: the recording dialogs, the finish-run confirmation and
-// the report actions get their call sites in the tasks that add those features.
+// The window is built in layers, so three fields below still carry their own
+// `#[allow(dead_code)]`: the recent-locations submenu and the report actions
+// get their call sites in the task that adds run browsing and report export.
 // Splitting the table across those tasks would mean the pt-BR and en wording of
-// one dialog no longer sits side by side, which is the only reason this file
+// one feature no longer sits side by side, which is the only reason this file
 // exists — and an unused field is a hard error under `-D warnings`. The
 // exemption is per-field on purpose: it covers exactly the strings that have no
-// caller yet, and disappears one attribute at a time as each is wired up.
+// caller yet, and disappears one attribute at a time as each is wired up —
+// recording took nine of the original twelve with it.
 pub struct T {
     pub app_title: &'static str,
     // Menu bar.
@@ -78,29 +79,20 @@ pub struct T {
     #[allow(dead_code)]
     pub testing_now: &'static str,
     // Dialogs.
-    #[allow(dead_code)]
     pub run_dlg_title: &'static str,
-    #[allow(dead_code)]
     pub run_dlg_env: &'static str,
-    #[allow(dead_code)]
     pub run_dlg_hint: &'static str,
     /// `%C` scenario, `%S` step.
-    #[allow(dead_code)]
     pub note_dlg_title: &'static str,
-    #[allow(dead_code)]
     pub note_dlg_hint: &'static str,
     #[allow(dead_code)]
     pub copied: &'static str,
-    #[allow(dead_code)]
     pub finish_title: &'static str,
     /// `%I` — the run id.
-    #[allow(dead_code)]
     pub finish_body: &'static str,
     /// Appended to a step's status when the suite was edited after the verdict.
     pub stale_marker: &'static str,
-    #[allow(dead_code)]
     pub dlg_ok: &'static str,
-    #[allow(dead_code)]
     pub dlg_cancel: &'static str,
 }
 

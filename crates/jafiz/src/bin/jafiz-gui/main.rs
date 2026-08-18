@@ -31,10 +31,9 @@ use std::sync::{Arc, Mutex};
 use jafiz::model::{scenario_done, scenario_status, RunFile, StepStatus, Suite};
 use jafiz::parser::Diagnostic;
 use jafiz::report;
+use jafiz::runs;
 use jafiz::settings::AppSettings;
 use jafiz::store::{self, LocationKind};
-// `jafiz::runs` is imported when recording arrives — an unused import here
-// would fail `-D warnings`.
 
 /// Shown in the About box.
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,7 +58,13 @@ const BUTTON_H: i32 = 26;
 const BUTTON_GAP: i32 = 6;
 const STATUS_H: i32 = 24;
 const SCENARIOS_W: i32 = 330;
+// The verdict keys. F1 is help and F5 is reload by Windows convention, so the
+// four verdicts take what is left around them — and the button captions say so.
+const VK_F2: u32 = 0x71;
+const VK_F3: u32 = 0x72;
+const VK_F4: u32 = 0x73;
 const VK_F5: u32 = 0x74;
+const VK_F6: u32 = 0x75;
 
 /// Mailbox the modal dialog threads fill; drained on the UI thread when the
 /// Notice fires. `pub(crate)` because the dialog modules write into it.
@@ -68,6 +73,19 @@ pub(crate) struct Shared {
     /// `Some(None)` means the dialog was cancelled.
     pub environment: Option<Option<String>>,
     pub note: Option<Option<String>>,
+}
+
+/// What the environment dialog's answer applies to. `Nova execução…` and
+/// `Ambiente…` are the same window and answer through the same mailbox slot,
+/// so the main window records which of the two it asked for before spawning
+/// the thread — reading it back off the menu handle is not possible once the
+/// answer arrives on a `Notice`.
+#[derive(Clone, Copy)]
+enum EnvTarget {
+    /// Start a run with the answer.
+    NewRun,
+    /// Re-describe the environment of the run already open.
+    ActiveRun,
 }
 
 struct UiState {
@@ -89,6 +107,13 @@ struct UiState {
     selected_scenario: Option<usize>,
     /// 1-based step number within the selected scenario.
     selected_step: Option<usize>,
+    /// What the environment dialog currently on screen was asked for.
+    env_target: EnvTarget,
+    /// The scenario id and step number the open note dialog is annotating,
+    /// captured when it was spawned. Re-reading the selection when the answer
+    /// arrives would attach the note to whatever is selected *then*, which is
+    /// not necessarily what the tester was looking at when they typed it.
+    note_target: Option<(String, usize)>,
 }
 
 struct JafizApp {
@@ -306,6 +331,8 @@ fn build_app(settings: AppSettings) -> JafizApp {
             run_file: RunFile::default(),
             selected_scenario: None,
             selected_step: None,
+            env_target: EnvTarget::NewRun,
+            note_target: None,
         }),
         shared: Arc::new(Mutex::new(Shared::default())),
     }
@@ -324,7 +351,20 @@ fn wire_events(app: &Rc<JafizApp>) {
             E::OnComboxBoxSelection if handle == app.suite_combo.handle => {
                 app.load_selected_suite();
             }
-            E::OnButtonClick if handle == app.btn_note.handle => app.open_note_dialog(),
+            E::OnButtonClick if handle == app.btn_pass.handle => {
+                app.mark_selected(StepStatus::Pass)
+            }
+            E::OnButtonClick if handle == app.btn_fail.handle => {
+                app.mark_selected(StepStatus::Fail)
+            }
+            E::OnButtonClick if handle == app.btn_blocked.handle => {
+                app.mark_selected(StepStatus::Blocked)
+            }
+            E::OnButtonClick if handle == app.btn_skip.handle => {
+                app.mark_selected(StepStatus::Skip)
+            }
+            E::OnButtonClick if handle == app.btn_note.handle => app.edit_note(),
+            E::OnButtonClick if handle == app.btn_evidence.handle => app.attach_evidence(),
             E::OnMenuItemSelected => {
                 if handle == app.menu_open.handle {
                     app.open_folder();
@@ -333,14 +373,16 @@ fn wire_events(app: &Rc<JafizApp>) {
                 } else if handle == app.menu_exit.handle {
                     nwg::stop_thread_dispatch();
                 } else if handle == app.menu_run_new.handle {
-                    app.open_run_dialog();
+                    app.new_run();
+                } else if handle == app.menu_run_env.handle {
+                    app.edit_environment();
+                } else if handle == app.menu_run_finish.handle {
+                    app.finish_run();
                 } else if handle == app.menu_help_format.handle {
                     app.show_format_help();
                 } else if handle == app.menu_about.handle {
                     app.show_about();
-                } else if handle == app.menu_run_env.handle
-                    || handle == app.menu_run_finish.handle
-                    || handle == app.menu_run_history.handle
+                } else if handle == app.menu_run_history.handle
                     || handle == app.menu_report_copy.handle
                     || handle == app.menu_report_save.handle
                     || handle == app.menu_prefs.handle
@@ -348,11 +390,20 @@ fn wire_events(app: &Rc<JafizApp>) {
                     app.not_wired_yet();
                 }
             }
-            E::OnKeyRelease => {
-                if let nwg::EventData::OnKey(VK_F5) = evt_data {
-                    app.load_selected_suite();
-                }
-            }
+            // The verdict keys are the whole point of the tool: both hands are
+            // on the app under test, so recording a step has to be one
+            // keystroke that never needs the mouse.
+            E::OnKeyRelease => match evt_data {
+                nwg::EventData::OnKey(VK_F2) => app.mark_selected(StepStatus::Pass),
+                nwg::EventData::OnKey(VK_F3) => app.mark_selected(StepStatus::Fail),
+                nwg::EventData::OnKey(VK_F4) => app.mark_selected(StepStatus::Blocked),
+                nwg::EventData::OnKey(VK_F5) => app.load_selected_suite(),
+                nwg::EventData::OnKey(VK_F6) => app.mark_selected(StepStatus::Skip),
+                _ => {}
+            },
+            // Double-clicking a step annotates it — the gesture a tester
+            // reaches for, and the one that does not cost a trip to a button.
+            E::OnListViewItemActivated if handle == app.steps.handle => app.edit_note(),
             E::OnListViewItemChanged | E::OnListViewClick if handle == app.scenarios.handle => {
                 if let Some(row) = changed_row(&evt_data) {
                     app.select_scenario_row(row);
@@ -379,6 +430,49 @@ fn changed_row(data: &nwg::EventData) -> Option<usize> {
         nwg::EventData::OnListViewItemChanged { row_index, selected: true, .. } => Some(row_index),
         _ => None,
     }
+}
+
+/// Moves a list view's selection to exactly one row.
+///
+/// `select_item` only *adds* to the selection — neither list is `LVS_SINGLESEL`
+/// — so the rows the cursor moved off are cleared first. Otherwise every
+/// advance would leave another row highlighted behind it, and the tester would
+/// be looking at a list that claims three steps are current.
+fn select_only(list: &nwg::ListView, row: usize) {
+    for selected in list.selected_items() {
+        if selected != row {
+            list.select_item(selected, false);
+        }
+    }
+    list.select_item(row, true);
+}
+
+/// Scrolls a row into view. A scenario can have more steps than the list
+/// shows, and a current step the tester has to scroll to find defeats the
+/// point of the marker moving on its own. nwg has no wrapper for this one.
+fn ensure_visible(list: &nwg::ListView, row: usize) {
+    use winapi::um::commctrl::LVM_ENSUREVISIBLE;
+    let Some(hwnd) = list.handle.hwnd() else { return };
+    // SAFETY: a live list-view HWND, and LVM_ENSUREVISIBLE takes no pointer —
+    // wParam is the row index and lParam a "partial is enough" flag.
+    unsafe {
+        winapi::um::winuser::SendMessageW(hwnd, LVM_ENSUREVISIBLE, row, 0);
+    }
+}
+
+/// Flattens a note to one line.
+///
+/// The dialog is a multi-line box because notes are prose, but a note is one
+/// field of one line everywhere it is read: `report` renders it as
+/// `**FALHOU**: <note>` and the step list shows it in a column. An embedded
+/// newline would break both, so the tester's paragraphs are joined with a
+/// space rather than silently truncated at the first line.
+fn fold_lines(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl JafizApp {
@@ -551,7 +645,7 @@ impl JafizApp {
         }
         self.populate_scenarios();
         self.populate_steps();
-        self.refresh_buttons();
+        self.update_buttons();
         self.update_status();
     }
 
@@ -668,7 +762,7 @@ impl JafizApp {
             state.selected_step = None;
         }
         self.populate_steps();
-        self.refresh_buttons();
+        self.update_buttons();
     }
 
     /// Remembers which step the tester clicked. The row is the step's position
@@ -686,15 +780,22 @@ impl JafizApp {
                 .map(|step| step.number);
             state.selected_step = number;
         }
-        self.refresh_buttons();
+        self.update_buttons();
     }
 
-    /// The verdict buttons only mean something with a step to mark, so they
-    /// follow the selection.
-    fn refresh_buttons(&self) {
-        let enabled = {
+    /// All six buttons need a step to record against *and* a run open to
+    /// record into: `runs::set_note` and `runs::add_evidence` go through
+    /// `RunFile::active_mut()` exactly like `runs::mark` does, so without a run
+    /// the note and evidence buttons would look available and do nothing.
+    fn update_buttons(&self) {
+        let recording = {
+            // Refilling a list re-enters the selection handlers while
+            // `populate_*` still holds the state borrowed; skipping the update
+            // is right, because the refill calls back into here afterwards.
             let Ok(state) = self.state.try_borrow() else { return };
-            state.selected_scenario.is_some() && state.selected_step.is_some()
+            state.selected_scenario.is_some()
+                && state.selected_step.is_some()
+                && state.run_file.active().is_some()
         };
         for button in [
             &self.btn_pass,
@@ -704,7 +805,7 @@ impl JafizApp {
             &self.btn_note,
             &self.btn_evidence,
         ] {
-            button.set_enabled(enabled);
+            button.set_enabled(recording);
         }
     }
 
@@ -736,43 +837,364 @@ impl JafizApp {
         self.load_location(&dir, LocationKind::Explicit);
     }
 
-    /// Opens the "new run" dialog.
-    ///
-    /// The real dialog will disable this window for as long as it owns the
-    /// interaction — it runs on its own thread, so nothing else enforces
-    /// modality. The stub puts no window on screen, so disabling here would
-    /// only make the main window flicker unusable for a frame and produce
-    /// nothing; `drain_dialog` re-enables either way.
-    fn open_run_dialog(&self) {
-        run_dialog::spawn(run_dialog::RunDialogParams {
-            shared: Arc::clone(&self.shared),
-            notify: self.notice.sender(),
-        });
+    /// Persists the run file after every change. It is a small JSON and a
+    /// sub-millisecond write, and it is what `jafiz report` in another
+    /// terminal reads — so Claude sees a verdict the instant it is recorded,
+    /// not whenever the window happens to close.
+    fn save_runs(&self) {
+        // The borrow is released before anything modal: `modal_error_message`
+        // pumps messages, and a `Notice` arriving inside it would re-enter
+        // `drain_dialog` and try to borrow the state mutably.
+        let outcome = {
+            let state = self.state.borrow();
+            store::save_runs(&state.location, &state.run_file)
+        };
+        if let Err(error) = outcome {
+            // Losing a verdict silently is the worst thing this tool could do,
+            // so a failed write is said out loud rather than logged nowhere.
+            nwg::modal_error_message(&self.window.handle, self.tr().app_title, &error);
+        }
     }
 
-    /// Opens the step-note dialog, on the same terms as `open_run_dialog`.
-    fn open_note_dialog(&self) {
-        note_dialog::spawn(note_dialog::NoteDialogParams {
+    /// Starts a run after asking for the environment. The last run's
+    /// environment is offered as the starting point — retesting the same build
+    /// is the common case.
+    fn new_run(&self) {
+        let (lang, environment) = {
+            let mut state = self.state.borrow_mut();
+            if state.suite.is_none() {
+                return; // nothing to run against
+            }
+            state.env_target = EnvTarget::NewRun;
+            let environment =
+                state.run_file.latest().map(|run| run.environment.clone()).unwrap_or_default();
+            (state.lang, environment)
+        };
+        self.open_env_dialog(lang, environment, t(lang).run_dlg_title);
+    }
+
+    /// Re-describes the open run's environment. Same window as `new_run`, but
+    /// the answer edits the run instead of starting one: the tester usually
+    /// learns the exact build only after the app is in front of them.
+    fn edit_environment(&self) {
+        let prepared = {
+            let mut state = self.state.borrow_mut();
+            state.env_target = EnvTarget::ActiveRun;
+            state.run_file.active().map(|run| (state.lang, run.environment.clone()))
+        };
+        let Some((lang, environment)) = prepared else {
+            self.warn_no_run();
+            return;
+        };
+        self.open_env_dialog(lang, environment, t(lang).menu_run_env.trim_end_matches('…'));
+    }
+
+    /// Puts the environment dialog on screen. It runs on its own thread, so
+    /// nothing but this disable makes it modal; `drain_dialog` hands the
+    /// window back when the answer arrives.
+    fn open_env_dialog(&self, lang: Lang, environment: String, title: &'static str) {
+        self.window.set_enabled(false);
+        run_dialog::spawn(run_dialog::RunParams {
+            lang,
+            environment,
+            title,
             shared: Arc::clone(&self.shared),
             notify: self.notice.sender(),
         });
     }
 
     /// Drains whatever a dialog thread left behind and hands the window back.
-    ///
-    /// Recording turns these outcomes into a run and a step note; today both
-    /// dialogs are stubs that always report a cancellation, so the mailbox is
-    /// read and emptied — leaving a stale entry there would make the next
-    /// dialog return someone else's answer.
     fn drain_dialog(&self) {
         // Unconditionally, and before the mailbox is even inspected: a dialog
         // thread that panics or exits without writing an outcome would
         // otherwise leave a `WS_DISABLED` top-level window the user cannot
-        // even close.
+        // even close. Each dialog notifies exactly once, so re-enabling here
+        // can never unlock the window under a modal that is still up.
         self.window.set_enabled(true);
-        let mut shared = self.shared.lock().unwrap();
-        let _ = shared.environment.take();
-        let _ = shared.note.take();
+        let (environment, note) = {
+            let mut shared = self.shared.lock().unwrap();
+            (shared.environment.take(), shared.note.take())
+        };
+        if let Some(Some(text)) = environment {
+            // Read out of the borrow before dispatching: both arms borrow the
+            // state mutably.
+            let target = self.state.borrow().env_target;
+            match target {
+                EnvTarget::NewRun => self.apply_new_run(&text),
+                EnvTarget::ActiveRun => self.apply_environment(&text),
+            }
+        }
+        match note {
+            Some(Some(text)) => self.apply_note(&text),
+            // Cancelled: forget which step was being annotated, so a later
+            // answer can never land on a step the tester has moved off.
+            Some(None) => self.state.borrow_mut().note_target = None,
+            None => {}
+        }
+    }
+
+    /// Opens a run over the suite on screen and follows its cursor to the
+    /// first step.
+    fn apply_new_run(&self, environment: &str) {
+        {
+            let mut state = self.state.borrow_mut();
+            // Cloned because `runs::start_run` needs `run_file` mutably while
+            // reading the suite; both live in the same `RefMut`.
+            let Some(suite) = state.suite.clone() else { return };
+            runs::start_run(&mut state.run_file, &suite, environment);
+        }
+        self.save_runs();
+        self.refresh_all();
+        self.follow_cursor();
+    }
+
+    /// Applies a re-typed environment to the run already open.
+    fn apply_environment(&self, environment: &str) {
+        {
+            let mut state = self.state.borrow_mut();
+            if !runs::set_environment(&mut state.run_file, environment) {
+                return; // the run was finished while the dialog was up
+            }
+        }
+        self.save_runs();
+        self.refresh_all();
+    }
+
+    /// Records a verdict on the selected step and moves the current marker on.
+    /// One click, and the tester's place moves by itself — recording per step
+    /// is worthless if finding the next step costs a search.
+    fn mark_selected(&self, status: StepStatus) {
+        let Some((scenario, step)) = self.recording_target() else { return };
+        let moved = {
+            let mut state = self.state.borrow_mut();
+            let Some(suite) = state.suite.clone() else { return };
+            runs::mark(&mut state.run_file, &suite, &scenario, step, status);
+            // Point "now" at what was just decided before advancing, so the
+            // search for the next pending step starts from here and not from
+            // wherever the marker had drifted to.
+            runs::set_current(&mut state.run_file, &scenario, step);
+            runs::advance(&mut state.run_file, &suite)
+        };
+        self.save_runs();
+        self.refresh_all();
+        // Follow the marker, into another scenario if that is where it went.
+        if let Some(cursor) = moved {
+            self.select_scenario_by_id(&cursor.scenario);
+            self.select_step_number(cursor.step);
+        }
+    }
+
+    /// The step a recording action applies to — the selected scenario's id and
+    /// the selected step's number — but only while a run is open to record
+    /// into. The state borrow is released before the warning: a modal pumps
+    /// messages, and a `Notice` arriving inside one re-enters `drain_dialog`.
+    fn recording_target(&self) -> Option<(String, usize)> {
+        let (recording, target) = {
+            let state = self.state.borrow();
+            let target = state
+                .suite
+                .as_ref()
+                .zip(state.selected_scenario)
+                .and_then(|(suite, index)| suite.scenarios.get(index))
+                .map(|scenario| scenario.id.clone())
+                .zip(state.selected_step);
+            (state.run_file.active().is_some(), target)
+        };
+        if !recording {
+            self.warn_no_run();
+            return None;
+        }
+        target
+    }
+
+    fn warn_no_run(&self) {
+        nwg::modal_info_message(&self.window.handle, self.tr().app_title, self.tr().no_run);
+    }
+
+    /// Opens the note dialog for the selected step, pre-filled with whatever
+    /// is already written there.
+    fn edit_note(&self) {
+        let Some((scenario, step)) = self.recording_target() else { return };
+        let (lang, note, title) = {
+            let mut state = self.state.borrow_mut();
+            let note = state
+                .run_file
+                .active()
+                .and_then(|run| run.result(&scenario, step))
+                .map(|result| result.note.clone())
+                .unwrap_or_default();
+            let title = t(state.lang)
+                .note_dlg_title
+                .replace("%C", &scenario)
+                .replace("%S", &step.to_string());
+            state.note_target = Some((scenario, step));
+            (state.lang, note, title)
+        };
+        self.window.set_enabled(false);
+        note_dialog::spawn(note_dialog::NoteParams {
+            lang,
+            note,
+            title,
+            shared: Arc::clone(&self.shared),
+            notify: self.notice.sender(),
+        });
+    }
+
+    /// Attaches the typed note to the step the dialog was opened on.
+    fn apply_note(&self, text: &str) {
+        let target = self.state.borrow_mut().note_target.take();
+        let Some((scenario, step)) = target else { return };
+        let note = fold_lines(text);
+        {
+            let mut state = self.state.borrow_mut();
+            runs::set_note(&mut state.run_file, &scenario, step, &note);
+        }
+        self.save_runs();
+        self.refresh_all();
+    }
+
+    /// File picker; the chosen path is attached to the selected step and shows
+    /// up in the report, so a screenshot travels with the verdict it explains.
+    fn attach_evidence(&self) {
+        let Some((scenario, step)) = self.recording_target() else { return };
+        let start = self.state.borrow().location.clone();
+        let mut builder = nwg::FileDialog::builder()
+            .action(nwg::FileDialogAction::Open)
+            .title(self.tr().btn_evidence.trim_end_matches('…'));
+        if start.is_dir() {
+            builder = builder.default_folder(start.display().to_string());
+        }
+        let mut dialog = nwg::FileDialog::default();
+        if builder.build(&mut dialog).is_err() {
+            return;
+        }
+        // `run` is modal on this thread and pumps messages, so no state borrow
+        // may be held across it.
+        if !dialog.run(Some(&self.window)) {
+            return;
+        }
+        let Ok(chosen) = dialog.get_selected_item() else { return };
+        let path = PathBuf::from(chosen).display().to_string();
+        {
+            let mut state = self.state.borrow_mut();
+            runs::add_evidence(&mut state.run_file, &scenario, step, &path);
+        }
+        self.save_runs();
+        self.refresh_all();
+    }
+
+    /// Closes the run. Confirmed first: a finished run stops accepting
+    /// verdicts, and the only way back is to start another one.
+    fn finish_run(&self) {
+        let (tr, id) = {
+            let state = self.state.borrow();
+            (t(state.lang), state.run_file.active().map(|run| run.id.clone()))
+        };
+        let Some(id) = id else {
+            self.warn_no_run();
+            return;
+        };
+        let choice = nwg::modal_message(
+            &self.window.handle,
+            &nwg::MessageParams {
+                title: tr.finish_title,
+                content: &tr.finish_body.replace("%I", &id),
+                buttons: nwg::MessageButtons::YesNo,
+                icons: nwg::MessageIcons::Question,
+            },
+        );
+        if choice != nwg::MessageChoice::Yes {
+            return;
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            runs::finish_run(&mut state.run_file);
+        }
+        self.save_runs();
+        self.refresh_all();
+    }
+
+    /// Rebuilds both lists and the status bar, preserving the selection — a
+    /// tester who has to find their place again after every verdict will stop
+    /// using the tool.
+    fn refresh_all(&self) {
+        let (scenario, step) = {
+            let state = self.state.borrow();
+            (state.selected_scenario, state.selected_step)
+        };
+        self.populate_scenarios();
+        self.populate_steps();
+        self.update_status();
+        if let Some(index) = scenario {
+            select_only(&self.scenarios, index);
+            // Refilling the list dropped the selection, and re-selecting it
+            // runs `select_scenario_row`, which clears `selected_step`. Both
+            // fields are put back here and in `select_step_number` below.
+            if let Ok(mut state) = self.state.try_borrow_mut() {
+                state.selected_scenario = Some(index);
+            }
+        }
+        if let Some(number) = step {
+            self.select_step_number(number);
+        }
+        self.update_buttons();
+    }
+
+    /// Moves the selection to wherever the active run says testing is now.
+    fn follow_cursor(&self) {
+        let cursor = {
+            let state = self.state.borrow();
+            state.run_file.active().and_then(|run| run.current.clone())
+        };
+        let Some(cursor) = cursor else { return };
+        self.select_scenario_by_id(&cursor.scenario);
+        self.select_step_number(cursor.step);
+    }
+
+    /// Points the scenario list at a scenario by its id, showing its steps.
+    fn select_scenario_by_id(&self, id: &str) {
+        let index = {
+            let state = self.state.borrow();
+            state
+                .suite
+                .as_ref()
+                .and_then(|suite| suite.scenarios.iter().position(|s| s.id == id))
+        };
+        let Some(index) = index else { return };
+        let already = self.state.borrow().selected_scenario == Some(index);
+        select_only(&self.scenarios, index);
+        ensure_visible(&self.scenarios, index);
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.selected_scenario = Some(index);
+        }
+        // Selecting a row that is already selected raises no notification, so
+        // the step list would keep showing the previous scenario's steps.
+        if already {
+            return;
+        }
+        self.populate_steps();
+    }
+
+    /// Points the step list at a step by its 1-based number. The number is not
+    /// the row: a scenario's steps are numbered from 1 in file order, and the
+    /// row is only where that step happens to sit in the list.
+    fn select_step_number(&self, number: usize) {
+        let row = {
+            let state = self.state.borrow();
+            state
+                .suite
+                .as_ref()
+                .zip(state.selected_scenario)
+                .and_then(|(suite, index)| suite.scenarios.get(index))
+                .and_then(|scenario| scenario.steps.iter().position(|s| s.number == number))
+        };
+        let Some(row) = row else { return };
+        select_only(&self.steps, row);
+        ensure_visible(&self.steps, row);
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.selected_step = Some(number);
+        }
+        self.update_buttons();
     }
 
     /// The format contract, verbatim from the same text `jafiz format` prints —
@@ -800,9 +1222,8 @@ impl JafizApp {
         nwg::modal_info_message(&self.window.handle, tr.about_title, &body);
     }
 
-    /// Menu commands that are routed but not implemented yet: recording a
-    /// verdict's environment, finishing a run, the run history, and the report
-    /// and preferences actions. Routing them now is what keeps every menu
-    /// handle live and the whole menu bar readable in one match.
+    /// Menu commands that are routed but not implemented yet: the run history
+    /// and the report and preferences actions. Routing them now is what keeps
+    /// every menu handle live and the whole menu bar readable in one match.
     fn not_wired_yet(&self) {}
 }

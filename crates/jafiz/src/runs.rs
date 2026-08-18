@@ -52,6 +52,16 @@ pub fn finish_run(file: &mut RunFile) -> bool {
     true
 }
 
+/// Re-describes where the active run is being executed. The environment heads
+/// the report, and it is routinely wrong at the moment a run starts — the
+/// tester picks the build up after opening the app, not before. Returns false
+/// when no run is open.
+pub fn set_environment(file: &mut RunFile, environment: &str) -> bool {
+    let Some(run) = file.active_mut() else { return false };
+    run.environment = environment.trim().to_string();
+    true
+}
+
 /// Records a verdict on one step of the active run, stamping the step's
 /// current action text so a later edit to the suite can be detected.
 pub fn mark(
