@@ -73,6 +73,10 @@ pub struct T {
     pub diagnostics: &'static str,
     /// `%S` the file name, `%E` the OS error — the suite could not be read.
     pub read_error: &'static str,
+    /// `%E` — the run file's path and the underlying error. A history that
+    /// exists but cannot be read is not the same as a suite never run, and the
+    /// window must not show the second when it found the first.
+    pub runs_damaged: &'static str,
     /// `%I` — the run being read instead of the one recording goes to.
     pub viewing_run: &'static str,
     /// `%I` — said out loud when a verdict key is pressed while reading an old
@@ -161,6 +165,7 @@ static PT: T = T {
     no_run: "Nenhuma execução. Use Execução ▸ Nova execução…",
     diagnostics: "⚠ %N problema(s) no arquivo",
     read_error: "Falha ao ler %S: %E",
+    runs_damaged: "⚠ histórico de execuções danificado — %E",
     viewing_run: "lendo a execução %I — a gravação continua na execução ativa",
     read_only: "Você está lendo a execução %I, que é só leitura.\r\n\r\nPara marcar passos, volte à execução ativa em Execução ▸ Histórico…",
     run_dlg_title: "Nova execução",
@@ -236,6 +241,7 @@ static EN: T = T {
     no_run: "No run yet. Use Run ▸ New run…",
     diagnostics: "⚠ %N problem(s) in the file",
     read_error: "Could not read %S: %E",
+    runs_damaged: "⚠ run history is damaged — %E",
     viewing_run: "reading run %I — recording still goes to the active run",
     read_only: "You are reading run %I, which is read-only.\r\n\r\nTo mark steps, go back to the active run under Run ▸ History…",
     run_dlg_title: "New run",

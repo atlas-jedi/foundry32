@@ -173,6 +173,11 @@ pub(crate) struct UiState {
     load_error: Option<String>,
     diagnostics: Vec<Diagnostic>,
     run_file: RunFile,
+    /// Why the run history came back empty, when a file was there and could
+    /// not be used. Shown in the status bar beside the diagnostics counter:
+    /// an empty history that is really a damaged file looks exactly like a
+    /// suite nobody ever ran, and the tester would start recording over it.
+    runs_damage: Option<String>,
     /// Index into `suite.scenarios`.
     selected_scenario: Option<usize>,
     /// 1-based step number within the selected scenario.
@@ -504,7 +509,9 @@ impl JafizApp {
             state.load_error = None;
             match path.as_ref().map(|p| store::load_suite(p)) {
                 Some(Ok(outcome)) => {
-                    state.run_file = store::load_runs(&dir, &outcome.suite.stem);
+                    let loaded = store::load_runs(&dir, &outcome.suite.stem);
+                    state.run_file = loaded.file;
+                    state.runs_damage = loaded.damage;
                     // Only write when it actually changed: every F5 and every
                     // combo change comes through here, and settings.json is not
                     // worth a disk write per keystroke.
@@ -530,11 +537,13 @@ impl JafizApp {
                     state.suite = None;
                     state.diagnostics.clear();
                     state.run_file = RunFile::default();
+                    state.runs_damage = None;
                 }
                 None => {
                     state.suite = None;
                     state.diagnostics.clear();
                     state.run_file = RunFile::default();
+                    state.runs_damage = None;
                 }
             }
             state.selected_scenario = None;
@@ -647,6 +656,12 @@ impl JafizApp {
             if !state.diagnostics.is_empty() {
                 let count = state.diagnostics.len().to_string();
                 text.push_str(&format!(" · {}", tr.diagnostics.replace("%N", &count)));
+            }
+            // Same reasoning one line up, for the other file: a run history
+            // that exists but could not be read must say so, or the window
+            // shows "no run recorded" over a file it is about to replace.
+            if let Some(reason) = state.runs_damage.as_deref() {
+                text.push_str(&format!(" · {}", tr.runs_damaged.replace("%E", reason)));
             }
             text
         };

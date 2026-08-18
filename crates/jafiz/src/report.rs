@@ -49,6 +49,10 @@ struct T {
     testing_now: &'static str,
     all_done: &'static str,
     stale: &'static str,
+    /// `%E` — the run file's path and the underlying error. A history that
+    /// exists but cannot be read must never be reported as a suite nobody
+    /// ever tested.
+    runs_damaged: &'static str,
 }
 
 static PT: T = T {
@@ -79,6 +83,7 @@ static PT: T = T {
     testing_now: "testando agora: %C passo %S",
     all_done: "todos os passos com veredito",
     stale: "(o passo mudou no arquivo depois desta marcação)",
+    runs_damaged: "histórico de execuções danificado — %E",
 };
 
 static EN: T = T {
@@ -109,6 +114,7 @@ static EN: T = T {
     testing_now: "testing now: %C step %S",
     all_done: "every step has a verdict",
     stale: "(the step changed in the file after this verdict)",
+    runs_damaged: "run history is damaged — %E",
 };
 
 fn t(lang: Lang) -> &'static T {
@@ -415,6 +421,13 @@ pub fn status_line(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
         progress_line(suite, Some(run), lang),
         where_at
     )
+}
+
+/// The one line that keeps a damaged run history from reading like a suite
+/// nobody ever tested. `reason` is `store::LoadedRuns::damage`, which carries
+/// the path and the OS or parser error but no sentence of its own.
+pub fn damaged_runs_line(reason: &str, lang: Lang) -> String {
+    t(lang).runs_damaged.replace("%E", reason)
 }
 
 /// One line per suite — `jafiz list`:

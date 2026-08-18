@@ -12,11 +12,12 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use jafiz::model::{Run, RunFile, Suite};
+use jafiz::model::{Run, Suite};
 // `Severity` is reached through `d.severity.label()`, never named — importing
 // it would be an unused import, which `-D warnings` turns into an error.
 use jafiz::parser::{EXAMPLE, GUIDE_EN, GUIDE_PT};
 use jafiz::settings::AppSettings;
+use jafiz::store::LoadedRuns;
 use jafiz::{report, store};
 
 use foundry_common::lang::Lang;
@@ -92,7 +93,7 @@ fn take_flag(args: &[String], flag: &str) -> (Option<String>, bool, Vec<String>)
 
 /// Loads a suite by name, or the only one present when no name is given.
 /// Prints the reason and returns None when it cannot.
-fn open_suite(dir: Option<&Path>, name: Option<&str>) -> Option<(PathBuf, Suite, RunFile)> {
+fn open_suite(dir: Option<&Path>, name: Option<&str>) -> Option<(PathBuf, Suite, LoadedRuns)> {
     let location = store::resolve_location(dir);
     let path = match name {
         Some(name) => {
@@ -156,14 +157,33 @@ fn cmd_list(dir: Option<&Path>, lang: Lang) {
     for path in suites {
         let Ok(outcome) = store::load_suite(&path) else { continue };
         let runs = store::load_runs(&location.dir, &outcome.suite.stem);
-        println!("{}", report::list_row(&outcome.suite, runs.latest(), lang));
+        // Listing every suite is not a verdict on any one of them, so a damaged
+        // history is named on stderr and the row still prints — now next to the
+        // reason it says no run was recorded.
+        report_damage(&runs, lang);
+        println!("{}", report::list_row(&outcome.suite, runs.file.latest(), lang));
     }
 }
 
 fn cmd_show(dir: Option<&Path>, name: Option<&str>, lang: Lang) -> ExitCode {
     let Some((_, suite, runs)) = open_suite(dir, name) else { return ExitCode::from(2) };
-    print!("{}", report::show(&suite, runs.latest(), lang));
+    if report_damage(&runs, lang) {
+        return ExitCode::from(2);
+    }
+    print!("{}", report::show(&suite, runs.file.latest(), lang));
     ExitCode::SUCCESS
+}
+
+/// Says on stderr that a suite's run history exists but could not be read, and
+/// reports whether that happened. The reading commands refuse rather than
+/// print a report over an empty history: "nenhuma execução registrada" for a
+/// damaged file is byte-identical to a suite nobody ever ran, and this is the
+/// output Claude believes. The same reasoning already refuses an unknown
+/// `--run` id.
+fn report_damage(runs: &LoadedRuns, lang: Lang) -> bool {
+    let Some(reason) = runs.damage.as_deref() else { return false };
+    eprintln!("jafiz: {}", report::damaged_runs_line(reason, lang));
+    true
 }
 
 fn cmd_status(dir: Option<&Path>, lang: Lang) {
@@ -172,8 +192,9 @@ fn cmd_status(dir: Option<&Path>, lang: Lang) {
     for path in store::list_suites(&location.dir) {
         let Ok(outcome) = store::load_suite(&path) else { continue };
         let runs = store::load_runs(&location.dir, &outcome.suite.stem);
-        if runs.active().is_some() {
-            println!("{}", report::status_line(&outcome.suite, runs.active(), lang));
+        report_damage(&runs, lang);
+        if runs.file.active().is_some() {
+            println!("{}", report::status_line(&outcome.suite, runs.file.active(), lang));
             any = true;
         }
     }
@@ -184,6 +205,10 @@ fn cmd_status(dir: Option<&Path>, lang: Lang) {
 
 fn cmd_report(dir: Option<&Path>, name: Option<&str>, run_id: Option<&str>, lang: Lang) -> ExitCode {
     let Some((_, suite, runs)) = open_suite(dir, name) else { return ExitCode::from(2) };
+    if report_damage(&runs, lang) {
+        return ExitCode::from(2);
+    }
+    let runs = &runs.file;
     let run: Option<&Run> = match run_id {
         Some(id) => match runs.run(id) {
             Some(run) => Some(run),
@@ -297,11 +322,15 @@ fn cmd_dump(dir: Option<&Path>, out: Option<&str>, lang: Lang) {
             Ok(outcome) => {
                 let runs = store::load_runs(&location.dir, &outcome.suite.stem);
                 text.push_str(&format!("\n=== {} ===\n", path.display()));
+                if let Some(reason) = runs.damage.as_deref() {
+                    text.push_str(&report::damaged_runs_line(reason, lang));
+                    text.push('\n');
+                }
                 for d in &outcome.diagnostics {
                     let where_at = if d.line > 0 { format!("linha {}", d.line) } else { "arquivo".into() };
                     text.push_str(&format!("{}: {where_at}: {}\n", d.severity.label(), d.message));
                 }
-                text.push_str(&report::show(&outcome.suite, runs.latest(), lang));
+                text.push_str(&report::show(&outcome.suite, runs.file.latest(), lang));
             }
             Err(e) => text.push_str(&format!("\n=== {} === ERRO: {e}\n", path.display())),
         }

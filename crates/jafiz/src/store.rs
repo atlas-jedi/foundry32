@@ -163,15 +163,49 @@ pub fn runs_path(dir: &Path, stem: &str) -> PathBuf {
     dir.join(".runs").join(format!("{stem}.json"))
 }
 
-/// Reads a suite's run history. A missing or unreadable file yields an empty
-/// history: progress is a convenience, and a corrupt one must never stop the
-/// user from testing.
-pub fn load_runs(dir: &Path, stem: &str) -> RunFile {
+/// A suite's run history, plus why it came back empty when it did.
+///
+/// `load_runs` still never fails — progress is a convenience, and a corrupt
+/// history must not stop the user from testing — but "no file yet" and "there
+/// is a file here and I could not use it" are different facts about the
+/// user's testing. Collapsing the second into the first makes a damaged
+/// history read exactly like a suite nobody ever ran, and `jafiz report` is
+/// the command Claude believes.
+pub struct LoadedRuns {
+    pub file: RunFile,
+    /// `Some(reason)` when a run file exists but could not be read or parsed.
+    /// Deliberately technical — the path and the underlying error, no prose —
+    /// because each front-end wraps it in its own language.
+    pub damage: Option<String>,
+}
+
+/// Reads a suite's run history. A missing file yields an empty history; one
+/// that exists but cannot be used yields an empty history *and* a reason.
+pub fn load_runs(dir: &Path, stem: &str) -> LoadedRuns {
     let empty = RunFile { suite: stem.to_string(), ..RunFile::default() };
-    let Ok(text) = std::fs::read_to_string(runs_path(dir, stem)) else { return empty };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else { return empty };
+    let path = runs_path(dir, stem);
+    let damaged = |reason: String| LoadedRuns {
+        file: RunFile { suite: stem.to_string(), ..RunFile::default() },
+        damage: Some(format!("{}: {reason}", path.display())),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        // A suite nobody has run yet has no file at all. That is the normal
+        // state, not damage — every other IO error is.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedRuns { file: empty, damage: None }
+        }
+        Err(e) => return damaged(e.to_string()),
+    };
+    // Parsed as a map rather than a bare `Value` so a file that is valid JSON
+    // but not an object — anything but what `save_runs` writes — is reported
+    // by serde in its own words instead of silently reading as zero runs.
+    let value = match serde_json::from_str::<serde_json::Map<String, Value>>(&text) {
+        Ok(map) => Value::Object(map),
+        Err(e) => return damaged(e.to_string()),
+    };
     let runs = value["runs"].as_array().map(|a| a.iter().map(run_from_json).collect());
-    RunFile {
+    let file = RunFile {
         // The filename is the identity, not the JSON's own `suite` field:
         // a run file copied alongside its suite still names the original, and
         // trusting it would make the next verdict overwrite that suite's
@@ -179,7 +213,8 @@ pub fn load_runs(dir: &Path, stem: &str) -> RunFile {
         suite: stem.to_string(),
         active_run: value["active_run"].as_str().map(str::to_string),
         runs: runs.unwrap_or_default(),
-    }
+    };
+    LoadedRuns { file, damage: None }
 }
 
 /// Writes a suite's run history as pretty-printed JSON — readable when
@@ -201,7 +236,22 @@ pub fn save_runs(dir: &Path, file: &RunFile) -> Result<(), String> {
         "runs": file.runs.iter().map(run_to_json).collect::<Vec<_>>(),
     }))
     .map_err(|e| e.to_string())?;
-    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
+    // Write beside the target, then rename over it. A plain `fs::write`
+    // truncates first, so a crash or a full disk mid-write leaves a half-file
+    // where a whole run history used to be — the exact damage `load_runs` now
+    // has to report. A rename either replaces the file or leaves the previous
+    // good one untouched. The `.tmp` naming follows the hub's download
+    // staging (`foundry32::paths::tmp_path_for`), and the leading dot keeps it
+    // out of the way if a save is interrupted before the rename.
+    let tmp = path.with_file_name(format!(".save.{}.json.tmp", file.suite));
+    std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        // Nothing reads a stray temp file, but leaving one behind after a
+        // failed save would strand a copy of the history under a name the
+        // user cannot open.
+        let _ = std::fs::remove_file(&tmp);
+        format!("write {}: {e}", path.display())
+    })
 }
 
 fn run_to_json(run: &Run) -> Value {

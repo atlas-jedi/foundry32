@@ -191,6 +191,7 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
             load_error: None,
             diagnostics: Vec::new(),
             run_file: RunFile::default(),
+            runs_damage: None,
             selected_scenario: None,
             selected_step: None,
             viewed_run: None,
