@@ -7,10 +7,11 @@
 //! wakes the main window with a `Notice`, exactly once.
 
 use crate::i18n::{t, Lang};
-use crate::Shared;
+use crate::{DialogGuard, DialogSlot, Shared};
 use foundry_common::theme::apply_classic_button_theme;
 use native_windows_gui as nwg;
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const MARGIN: i32 = 12;
@@ -50,6 +51,16 @@ fn run_dialog(params: RunParams) {
     // `environment` while `shared`/`notify` move into the event closure.
     let RunParams { lang, environment, title, shared, notify } = params;
     let tr = t(lang);
+
+    // The one-Notice guard, armed before the first `.expect` below. It is a
+    // thread-local `Cell` and not the mailbox slot: the UI thread `take()`s
+    // that slot the moment it is woken, so a second event arriving after the
+    // drain would find it empty and send again. `DialogGuard` shares this very
+    // flag so that a panic during construction still hands the main window
+    // back — and so that it stays quiet once the dialog has answered.
+    let sent = Rc::new(Cell::new(false));
+    let _guard =
+        DialogGuard::new(Rc::clone(&sent), DialogSlot::Environment, Arc::clone(&shared), notify);
 
     let mut window = nwg::Window::default();
     nwg::Window::builder()
@@ -126,11 +137,6 @@ fn run_dialog(params: RunParams) {
     let window_handle = window.handle;
     let ok_handle = ok_btn.handle;
     let cancel_handle = cancel_btn.handle;
-    // Thread-local guard for the one-Notice rule. It cannot be the mailbox
-    // slot itself: the UI thread `take()`s that slot the moment it is woken,
-    // so a second event arriving after the drain would find it empty and send
-    // again.
-    let sent = Cell::new(false);
     let handler = nwg::full_bind_event_handler(&window_handle, move |evt, evt_data, handle| {
         use nwg::Event as E;
         match evt {

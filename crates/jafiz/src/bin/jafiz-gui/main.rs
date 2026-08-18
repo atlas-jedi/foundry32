@@ -11,24 +11,28 @@
 //! sub-millisecond, so unlike WITN there is no scanner thread. The only
 //! threads are the modal dialogs, which follow the nwg multithread pattern
 //! (see crates/mcp-console/src/gui/preferences_dialog.rs).
+//!
+//! This module is behaviour only. How the window is built, laid out and
+//! captioned lives in `chrome`.
 
 #![windows_subsystem = "windows"]
 
+mod chrome;
+mod history_dialog;
 mod i18n;
 mod note_dialog;
+mod preferences_dialog;
 mod run_dialog;
 
 use i18n::{t, Lang, T};
 
-use foundry_common::theme::{apply_classic_button_theme, apply_explorer_theme};
-use foundry_common::ui::{apply_window_icon, insert_report_list_view_column};
 use native_windows_gui as nwg;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use jafiz::model::{scenario_done, scenario_status, RunFile, StepStatus, Suite};
+use jafiz::model::{scenario_done, scenario_status, tally, Run, RunFile, StepStatus, Suite};
 use jafiz::parser::Diagnostic;
 use jafiz::report;
 use jafiz::runs;
@@ -38,26 +42,9 @@ use jafiz::store::{self, LocationKind};
 /// Shown in the About box.
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// Scenario list columns.
-const SC_STATUS: usize = 0;
-const SC_ID: usize = 1;
-const SC_TITLE: usize = 2;
-const SC_PROGRESS: usize = 3;
+/// Where the format guide is dropped for whatever the user reads Markdown with.
+const GUIDE_FILE: &str = "jafiz-formato.md";
 
-// Step list columns.
-const ST_NUM: usize = 0;
-const ST_STATUS: usize = 1;
-const ST_ACTION: usize = 2;
-const ST_EXPECTED: usize = 3;
-const ST_NOTE: usize = 4;
-
-const MARGIN: i32 = 8;
-const HEADER_H: i32 = 26;
-const BUTTON_W: i32 = 116;
-const BUTTON_H: i32 = 26;
-const BUTTON_GAP: i32 = 6;
-const STATUS_H: i32 = 24;
-const SCENARIOS_W: i32 = 330;
 // The verdict keys. F1 is help and F5 is reload by Windows convention, so the
 // four verdicts take what is left around them — and the button captions say so.
 const VK_F2: u32 = 0x71;
@@ -68,11 +55,94 @@ const VK_F6: u32 = 0x75;
 
 /// Mailbox the modal dialog threads fill; drained on the UI thread when the
 /// Notice fires. `pub(crate)` because the dialog modules write into it.
+///
+/// Every slot spells "cancelled" as `Some(None)`, and only one dialog can be
+/// open at a time (the main window is disabled while one is up), so the four
+/// slots never contend.
 #[derive(Default)]
 pub(crate) struct Shared {
     /// `Some(None)` means the dialog was cancelled.
     pub environment: Option<Option<String>>,
     pub note: Option<Option<String>>,
+    /// The run id picked in Histórico.
+    pub history: Option<Option<String>>,
+    /// The language picked in Preferências.
+    pub preferences: Option<Option<Lang>>,
+}
+
+/// Which `Shared` slot a dialog answers through.
+#[derive(Clone, Copy)]
+pub(crate) enum DialogSlot {
+    Environment,
+    Note,
+    History,
+    Preferences,
+}
+
+impl DialogSlot {
+    /// Writes "cancelled" into this dialog's slot.
+    fn cancel(self, shared: &mut Shared) {
+        match self {
+            DialogSlot::Environment => shared.environment = Some(None),
+            DialogSlot::Note => shared.note = Some(None),
+            DialogSlot::History => shared.history = Some(None),
+            DialogSlot::Preferences => shared.preferences = Some(None),
+        }
+    }
+}
+
+/// Last-resort notifier for a dialog thread that unwinds before it answers.
+///
+/// Every dialog builds its window with `.expect(…)`, and the event handler that
+/// would post the answer is installed last. A panic anywhere before that leaves
+/// no outcome, no `Notice` and therefore no `drain_dialog` — and the main
+/// window, disabled just before `spawn`, stays `WS_DISABLED` forever: the user
+/// cannot even close it. Held on the dialog thread's stack from its first line,
+/// this posts a cancellation on the way out if `send_outcome` never ran.
+///
+/// The flag is the very `Cell` the handler's `send_outcome` sets, so the
+/// exactly-once rule still holds: on the normal path the guard finds it already
+/// true and does nothing. It cannot help a release build — the workspace's
+/// release profile is `panic = "abort"`, which takes the process down before
+/// any destructor runs — but it covers dev builds and every non-panicking early
+/// return out of a dialog thread.
+pub(crate) struct DialogGuard {
+    sent: Rc<Cell<bool>>,
+    slot: DialogSlot,
+    shared: Arc<Mutex<Shared>>,
+    notify: nwg::NoticeSender,
+}
+
+impl DialogGuard {
+    /// Arms the guard. `sent` must be the same flag the dialog's `send_outcome`
+    /// sets, or the guard would fire behind a dialog that already answered.
+    pub(crate) fn new(
+        sent: Rc<Cell<bool>>,
+        slot: DialogSlot,
+        shared: Arc<Mutex<Shared>>,
+        notify: nwg::NoticeSender,
+    ) -> DialogGuard {
+        DialogGuard { sent, slot, shared, notify }
+    }
+}
+
+impl Drop for DialogGuard {
+    fn drop(&mut self) {
+        if self.sent.replace(true) {
+            return; // the dialog answered for itself
+        }
+        // Nothing in here may panic: this can run while the thread is already
+        // unwinding, and a panic during unwind aborts the process. That is why
+        // the mutex is taken back out of a poisoned lock instead of unwrapped —
+        // the panic that poisoned it is very likely the one being handled.
+        let mut shared = match self.shared.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.slot.cancel(&mut shared);
+        drop(shared);
+        self.notify.notice();
+    }
 }
 
 /// What the environment dialog's answer applies to. `Nova execução…` and
@@ -81,14 +151,14 @@ pub(crate) struct Shared {
 /// the thread — reading it back off the menu handle is not possible once the
 /// answer arrives on a `Notice`.
 #[derive(Clone, Copy)]
-enum EnvTarget {
+pub(crate) enum EnvTarget {
     /// Start a run with the answer.
     NewRun,
     /// Re-describe the environment of the run already open.
     ActiveRun,
 }
 
-struct UiState {
+pub(crate) struct UiState {
     lang: Lang,
     settings: AppSettings,
     location: PathBuf,
@@ -107,6 +177,11 @@ struct UiState {
     selected_scenario: Option<usize>,
     /// 1-based step number within the selected scenario.
     selected_step: Option<usize>,
+    /// The run picked in Histórico, when the tester went looking at an older
+    /// one. `None` — the normal state — means "whatever `viewed_run` resolves
+    /// to": the active run, else the most recent. Nothing that *records* ever
+    /// reads this field; a verdict always lands in the active run.
+    viewed_run: Option<String>,
     /// What the environment dialog currently on screen was asked for.
     env_target: EnvTarget,
     /// The scenario id and step number the open note dialog is annotating,
@@ -116,7 +191,7 @@ struct UiState {
     note_target: Option<(String, usize)>,
 }
 
-struct JafizApp {
+pub(crate) struct JafizApp {
     window: nwg::Window,
     suite_label: nwg::Label,
     suite_combo: nwg::ComboBox<String>,
@@ -143,20 +218,19 @@ struct JafizApp {
     menu_prefs: nwg::MenuItem,
     menu_help_format: nwg::MenuItem,
     menu_about: nwg::MenuItem,
-    // The five top-level menu-bar entries. Nothing reads them yet — hence the
-    // `_` prefix, which is what keeps `dead_code` quiet — but they cannot be
-    // locals: `nwg::Menu`'s `Drop` calls `DestroyMenu`, so letting them go out
-    // of scope at the end of `build_app` would destroy the whole menu bar,
-    // items included, before the window is ever shown. They are declared after
-    // the `MenuItem` fields on purpose: fields drop in declaration order, and
-    // `MenuItem`'s `Drop` calls `DeleteMenu` on its parent, which must still
-    // exist. Language switching will read them through
-    // `foundry_common::ui::set_submenu_text`, one named field each.
-    _menu_file: nwg::Menu,
-    _menu_run: nwg::Menu,
-    _menu_report: nwg::Menu,
-    _menu_tools: nwg::Menu,
-    _menu_help: nwg::Menu,
+    // The five top-level menu-bar entries. `relabel_menus` re-captions them
+    // through `foundry_common::ui::set_submenu_text`, one named field each,
+    // but they would have to be fields even if nothing read them: `nwg::Menu`'s
+    // `Drop` calls `DestroyMenu`, so letting them go out of scope at the end of
+    // `chrome::build_app` would destroy the whole menu bar, items included,
+    // before the window is ever shown. They are declared after the `MenuItem`
+    // fields on purpose: fields drop in declaration order, and `MenuItem`'s
+    // `Drop` calls `DeleteMenu` on its parent, which must still exist.
+    menu_file: nwg::Menu,
+    menu_run: nwg::Menu,
+    menu_report: nwg::Menu,
+    menu_tools: nwg::Menu,
+    menu_help: nwg::Menu,
     state: RefCell<UiState>,
     shared: Arc<Mutex<Shared>>,
 }
@@ -166,176 +240,11 @@ fn main() {
     let _ = nwg::Font::set_global_family("Segoe UI");
 
     let settings = AppSettings::load();
-    let app = Rc::new(build_app(settings));
+    let app = Rc::new(chrome::build_app(settings));
     wire_events(&app);
     app.layout();
     app.open_initial_location();
     nwg::dispatch_thread_events();
-}
-
-fn build_app(settings: AppSettings) -> JafizApp {
-    let lang = settings.lang;
-    let tr = t(lang);
-
-    let mut window = nwg::Window::default();
-    nwg::Window::builder()
-        .size((1020, 640))
-        .position((160, 100))
-        .title(tr.app_title)
-        .flags(nwg::WindowFlags::MAIN_WINDOW | nwg::WindowFlags::VISIBLE | nwg::WindowFlags::RESIZABLE)
-        .build(&mut window)
-        .expect("window");
-
-    // Menu bar. `nwg::Menu` is a top-level submenu, `nwg::MenuItem` a command;
-    // both are addressed by handle in the event handler.
-    let submenu = |text: &str, window: &nwg::Window| {
-        let mut menu = nwg::Menu::default();
-        nwg::Menu::builder().parent(window).text(text).build(&mut menu).expect("menu");
-        menu
-    };
-    let item = |text: &str, parent: &nwg::Menu| {
-        let mut menu_item = nwg::MenuItem::default();
-        nwg::MenuItem::builder().parent(parent).text(text).build(&mut menu_item).expect("item");
-        menu_item
-    };
-    let menu_file = submenu(tr.menu_file, &window);
-    let menu_open = item(tr.menu_open, &menu_file);
-    let menu_reload = item(tr.menu_reload, &menu_file);
-    let menu_exit = item(tr.menu_exit, &menu_file);
-    let menu_run = submenu(tr.menu_run, &window);
-    let menu_run_new = item(tr.menu_run_new, &menu_run);
-    let menu_run_env = item(tr.menu_run_env, &menu_run);
-    let menu_run_finish = item(tr.menu_run_finish, &menu_run);
-    let menu_run_history = item(tr.menu_run_history, &menu_run);
-    let menu_report = submenu(tr.menu_report, &window);
-    let menu_report_copy = item(tr.menu_report_copy, &menu_report);
-    let menu_report_save = item(tr.menu_report_save, &menu_report);
-    let menu_tools = submenu(tr.menu_tools, &window);
-    let menu_prefs = item(tr.menu_prefs, &menu_tools);
-    let menu_help = submenu(tr.menu_help, &window);
-    let menu_help_format = item(tr.menu_help_format, &menu_help);
-    let menu_about = item(tr.menu_about, &menu_help);
-
-    // Header row: suite picker + the folder the suites came from.
-    let mut suite_label = nwg::Label::default();
-    nwg::Label::builder().parent(&window).text(tr.lbl_suite).build(&mut suite_label).expect("suite_label");
-    let mut suite_combo: nwg::ComboBox<String> = nwg::ComboBox::default();
-    nwg::ComboBox::builder().parent(&window).collection(Vec::new()).build(&mut suite_combo).expect("suite_combo");
-    let mut location_label = nwg::Label::default();
-    nwg::Label::builder().parent(&window).text("").build(&mut location_label).expect("location_label");
-
-    // The two report-style lists.
-    let list = |parent: &nwg::Window| {
-        let mut listview = nwg::ListView::default();
-        nwg::ListView::builder()
-            .parent(parent)
-            .list_style(nwg::ListViewStyle::Detailed)
-            .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID)
-            .build(&mut listview)
-            .expect("listview");
-        // nwg forces LVS_NOCOLUMNHEADER at creation for backward compatibility.
-        listview.set_headers_enabled(true);
-        apply_explorer_theme(&listview.handle);
-        listview
-    };
-    let scenarios = list(&window);
-    for (index, width, title) in [
-        (SC_STATUS, 46, tr.col_status),
-        (SC_ID, 60, tr.col_id),
-        (SC_TITLE, 170, tr.col_scenario),
-        (SC_PROGRESS, 52, tr.col_progress),
-    ] {
-        insert_report_list_view_column(&scenarios, index as i32, width, title);
-    }
-    let steps = list(&window);
-    for (index, width, title) in [
-        (ST_NUM, 32, tr.col_num),
-        (ST_STATUS, 46, tr.col_status),
-        (ST_ACTION, 250, tr.col_action),
-        (ST_EXPECTED, 250, tr.col_expected),
-        (ST_NOTE, 200, tr.col_note),
-    ] {
-        insert_report_list_view_column(&steps, index as i32, width, title);
-    }
-
-    // Verdict buttons, under the step list — where the tester's eyes already
-    // are while reading the step they just executed.
-    let button = |text: &str, parent: &nwg::Window| {
-        let mut control = nwg::Button::default();
-        nwg::Button::builder().parent(parent).text(text).build(&mut control).expect("button");
-        apply_classic_button_theme(&control);
-        control
-    };
-    let btn_pass = button(tr.btn_pass, &window);
-    let btn_fail = button(tr.btn_fail, &window);
-    let btn_blocked = button(tr.btn_blocked, &window);
-    let btn_skip = button(tr.btn_skip, &window);
-    let btn_note = button(tr.btn_note, &window);
-    let btn_evidence = button(tr.btn_evidence, &window);
-
-    let mut status_bar = nwg::StatusBar::default();
-    nwg::StatusBar::builder().parent(&window).text("").build(&mut status_bar).expect("status_bar");
-
-    let mut notice = nwg::Notice::default();
-    nwg::Notice::builder().parent(&window).build(&mut notice).expect("notice");
-
-    // Title bar, taskbar and Alt+Tab icons (absent on plain GNU dev builds).
-    apply_window_icon(&window.handle);
-
-    // Every verdict button starts disabled — nothing is selected yet.
-    for control in [&btn_pass, &btn_fail, &btn_blocked, &btn_skip, &btn_note, &btn_evidence] {
-        control.set_enabled(false);
-    }
-
-    JafizApp {
-        window,
-        suite_label,
-        suite_combo,
-        location_label,
-        scenarios,
-        steps,
-        btn_pass,
-        btn_fail,
-        btn_blocked,
-        btn_skip,
-        btn_note,
-        btn_evidence,
-        status_bar,
-        notice,
-        menu_open,
-        menu_reload,
-        menu_exit,
-        menu_run_new,
-        menu_run_env,
-        menu_run_finish,
-        menu_run_history,
-        menu_report_copy,
-        menu_report_save,
-        menu_prefs,
-        menu_help_format,
-        menu_about,
-        _menu_file: menu_file,
-        _menu_run: menu_run,
-        _menu_report: menu_report,
-        _menu_tools: menu_tools,
-        _menu_help: menu_help,
-        state: RefCell::new(UiState {
-            lang,
-            settings,
-            location: PathBuf::new(),
-            location_kind: LocationKind::Library,
-            suite_paths: Vec::new(),
-            suite: None,
-            load_error: None,
-            diagnostics: Vec::new(),
-            run_file: RunFile::default(),
-            selected_scenario: None,
-            selected_step: None,
-            env_target: EnvTarget::NewRun,
-            note_target: None,
-        }),
-        shared: Arc::new(Mutex::new(Shared::default())),
-    }
 }
 
 fn wire_events(app: &Rc<JafizApp>) {
@@ -382,12 +291,14 @@ fn wire_events(app: &Rc<JafizApp>) {
                     app.show_format_help();
                 } else if handle == app.menu_about.handle {
                     app.show_about();
-                } else if handle == app.menu_run_history.handle
-                    || handle == app.menu_report_copy.handle
-                    || handle == app.menu_report_save.handle
-                    || handle == app.menu_prefs.handle
-                {
-                    app.not_wired_yet();
+                } else if handle == app.menu_run_history.handle {
+                    app.show_history();
+                } else if handle == app.menu_report_copy.handle {
+                    app.copy_report();
+                } else if handle == app.menu_report_save.handle {
+                    app.save_report();
+                } else if handle == app.menu_prefs.handle {
+                    app.open_preferences();
                 }
             }
             // The verdict keys are the whole point of the tool: both hands are
@@ -475,56 +386,32 @@ fn fold_lines(text: &str) -> String {
         .join(" ")
 }
 
+/// The run the window is showing: the one picked in Histórico, else the active
+/// one, else the most recent.
+///
+/// Every read of the run — both lists, the status bar, the report — goes
+/// through here. Every *write* goes through `RunFile::active_mut` instead, so
+/// reading an old run can never let a verdict land in it.
+fn viewed_run(state: &UiState) -> Option<&Run> {
+    match state.viewed_run.as_deref() {
+        Some(id) => state.run_file.run(id),
+        None => state.run_file.latest(),
+    }
+}
+
+/// True while the window is showing a run other than the one recording would
+/// land in. The verdict buttons are disabled for exactly this state: pressing
+/// F2 while reading last week's run would silently mark a step of *today's*.
+fn viewing_other_run(state: &UiState) -> bool {
+    match state.viewed_run.as_deref() {
+        Some(id) => state.run_file.active_run.as_deref() != Some(id),
+        None => false,
+    }
+}
+
 impl JafizApp {
     fn tr(&self) -> &'static T {
         t(self.state.borrow().lang)
-    }
-
-    /// Header row across the top, scenarios on the left, steps on the right
-    /// with the verdict buttons under them, status bar at the bottom.
-    fn layout(&self) {
-        let (width, height) = self.window.size();
-        let (width, height) = (width as i32, height as i32);
-        if width < 560 || height < 320 {
-            return;
-        }
-        let header_y = MARGIN;
-        let list_y = header_y + HEADER_H + MARGIN;
-        let button_y = height - STATUS_H - BUTTON_H - MARGIN;
-        let list_h = (button_y - list_y - MARGIN).max(80) as u32;
-
-        self.suite_label.set_position(MARGIN, header_y + 4);
-        self.suite_label.set_size(44, 20);
-        self.suite_combo.set_position(MARGIN + 48, header_y);
-        self.suite_combo.set_size(280, 24);
-        self.location_label.set_position(MARGIN + 340, header_y + 4);
-        self.location_label.set_size((width - MARGIN - 348).max(80) as u32, 20);
-
-        self.scenarios.set_position(MARGIN, list_y);
-        self.scenarios.set_size(SCENARIOS_W as u32, list_h);
-        let steps_x = MARGIN + SCENARIOS_W + MARGIN;
-        self.steps.set_position(steps_x, list_y);
-        self.steps.set_size((width - steps_x - MARGIN).max(160) as u32, list_h);
-
-        // Anchor the verdict row to the right edge: fixed-width buttons laid
-        // out from the steps list would run past the client area at the
-        // default window size. Below the width the row needs, it clamps to the
-        // left margin — the best a fixed-width row can do while staying
-        // on-screen from the left.
-        let total = 6 * BUTTON_W + 5 * BUTTON_GAP;
-        let mut x = (width - MARGIN - total).max(MARGIN);
-        for button in [
-            &self.btn_pass,
-            &self.btn_fail,
-            &self.btn_blocked,
-            &self.btn_skip,
-            &self.btn_note,
-            &self.btn_evidence,
-        ] {
-            button.set_position(x, button_y);
-            button.set_size(BUTTON_W as u32, BUTTON_H as u32);
-            x += BUTTON_W + BUTTON_GAP;
-        }
     }
 
     /// Opens the folder this launch should show. The engine's cascade decides
@@ -573,22 +460,32 @@ impl JafizApp {
             state.suite_paths = paths;
         }
         self.suite_combo.set_collection(names);
-        // Which rung of the cascade produced the folder is part of the answer
-        // to "why am I looking at these suites" — a folder the user picked,
-        // `JAFIZ_DIR`, the enclosing project or the central library all look
-        // alike otherwise. The wording is the GUI's own: `LocationKind::label`
-        // is a pt-BR CLI constant and would leak into an English window.
-        let tr = self.tr();
-        let source = match kind {
-            LocationKind::Explicit => tr.loc_explicit,
-            LocationKind::Env => tr.loc_env,
-            LocationKind::Project => tr.loc_project,
-            LocationKind::Library => tr.loc_library,
-        };
-        self.location_label
-            .set_text(&format!("{} {} ({})", tr.lbl_location, dir.display(), source));
+        self.set_location_label();
         self.suite_combo.set_selection(Some(0));
         self.load_selected_suite();
+    }
+
+    /// Rewrites the header's "Local:" line.
+    ///
+    /// Which rung of the cascade produced the folder is part of the answer to
+    /// "why am I looking at these suites" — a folder the user picked,
+    /// `JAFIZ_DIR`, the enclosing project or the central library all look alike
+    /// otherwise. The wording is the GUI's own: `LocationKind::label` is a
+    /// pt-BR CLI constant and would leak into an English window — which is also
+    /// why this is its own method, called again when the language changes.
+    fn set_location_label(&self) {
+        let text = {
+            let state = self.state.borrow();
+            let tr = t(state.lang);
+            let source = match state.location_kind {
+                LocationKind::Explicit => tr.loc_explicit,
+                LocationKind::Env => tr.loc_env,
+                LocationKind::Project => tr.loc_project,
+                LocationKind::Library => tr.loc_library,
+            };
+            format!("{} {} ({})", tr.lbl_location, state.location.display(), source)
+        };
+        self.location_label.set_text(&text);
     }
 
     /// Loads the suite the picker points at, plus its run history.
@@ -642,6 +539,10 @@ impl JafizApp {
             }
             state.selected_scenario = None;
             state.selected_step = None;
+            // The history belongs to the suite that was open: an id from the
+            // old one would resolve to nothing here, leaving the window blank
+            // with no way back except another trip through Histórico.
+            state.viewed_run = None;
         }
         self.populate_scenarios();
         self.populate_steps();
@@ -677,7 +578,7 @@ impl JafizApp {
         self.scenarios.clear();
         let state = self.state.borrow();
         let Some(suite) = state.suite.as_ref() else { return };
-        let run = state.run_file.latest();
+        let run = viewed_run(&state);
         for scenario in &suite.scenarios {
             let row = [
                 scenario_status(scenario, run).symbol().to_string(),
@@ -698,7 +599,7 @@ impl JafizApp {
         let Some(suite) = state.suite.as_ref() else { return };
         let Some(index) = state.selected_scenario else { return };
         let Some(scenario) = suite.scenarios.get(index) else { return };
-        let run = state.run_file.latest();
+        let run = viewed_run(&state);
         let current = run.and_then(|r| r.current.clone());
         for step in &scenario.steps {
             let result = run.and_then(|r| r.result(&scenario.id, step.number));
@@ -727,11 +628,19 @@ impl JafizApp {
             let mut text = match (state.load_error.as_ref(), state.suite.as_ref()) {
                 (Some(error), _) => error.clone(),
                 (None, None) => tr.no_suites.replace("%D", &state.location.display().to_string()),
-                (None, Some(suite)) => match state.run_file.latest() {
+                (None, Some(suite)) => match viewed_run(&state) {
                     None => format!("{} · {}", suite.title, tr.no_run),
                     Some(run) => report::status_line(suite, Some(run), state.lang),
                 },
             };
+            // Reading an old run looks exactly like recording into it until the
+            // window says otherwise — and the greyed-out verdict buttons alone
+            // read as a bug rather than as an explanation.
+            if viewing_other_run(&state) {
+                if let Some(id) = state.viewed_run.as_deref() {
+                    text.push_str(&format!(" · {}", tr.viewing_run.replace("%I", id)));
+                }
+            }
             // A suite the parser could not fully read shows fewer scenarios
             // than the file has. Say so here rather than let the list quietly
             // lie about what is going to be tested.
@@ -787,6 +696,11 @@ impl JafizApp {
     /// record into: `runs::set_note` and `runs::add_evidence` go through
     /// `RunFile::active_mut()` exactly like `runs::mark` does, so without a run
     /// the note and evidence buttons would look available and do nothing.
+    ///
+    /// They also need the window to be showing that same run. Recording targets
+    /// the active run whatever is on screen, so leaving the buttons live while
+    /// an older run is being read would let a click land somewhere the tester
+    /// is not looking.
     fn update_buttons(&self) {
         let recording = {
             // Refilling a list re-enters the selection handlers while
@@ -796,6 +710,7 @@ impl JafizApp {
             state.selected_scenario.is_some()
                 && state.selected_step.is_some()
                 && state.run_file.active().is_some()
+                && !viewing_other_run(&state)
         };
         for button in [
             &self.btn_pass,
@@ -911,9 +826,14 @@ impl JafizApp {
         // even close. Each dialog notifies exactly once, so re-enabling here
         // can never unlock the window under a modal that is still up.
         self.window.set_enabled(true);
-        let (environment, note) = {
+        let (environment, note, history, preferences) = {
             let mut shared = self.shared.lock().unwrap();
-            (shared.environment.take(), shared.note.take())
+            (
+                shared.environment.take(),
+                shared.note.take(),
+                shared.history.take(),
+                shared.preferences.take(),
+            )
         };
         if let Some(Some(text)) = environment {
             // Read out of the borrow before dispatching: both arms borrow the
@@ -931,6 +851,12 @@ impl JafizApp {
             Some(None) => self.state.borrow_mut().note_target = None,
             None => {}
         }
+        if let Some(Some(id)) = history {
+            self.apply_viewed_run(&id);
+        }
+        if let Some(Some(lang)) = preferences {
+            self.apply_language(lang);
+        }
     }
 
     /// Opens a run over the suite on screen and follows its cursor to the
@@ -942,6 +868,9 @@ impl JafizApp {
             // reading the suite; both live in the same `RefMut`.
             let Some(suite) = state.suite.clone() else { return };
             runs::start_run(&mut state.run_file, &suite, environment);
+            // Starting a run is a statement about what to look at now, so it
+            // takes the window off whatever old run Histórico had left on it.
+            state.viewed_run = None;
         }
         self.save_runs();
         self.refresh_all();
@@ -986,10 +915,17 @@ impl JafizApp {
 
     /// The step a recording action applies to — the selected scenario's id and
     /// the selected step's number — but only while a run is open to record
-    /// into. The state borrow is released before the warning: a modal pumps
-    /// messages, and a `Notice` arriving inside one re-enters `drain_dialog`.
+    /// into *and* on screen. The state borrow is released before the warning: a
+    /// modal pumps messages, and a `Notice` arriving inside one re-enters
+    /// `drain_dialog`.
+    ///
+    /// The read-only check has to be here and not only in `update_buttons`:
+    /// F2–F6 are bound on the window, not on the buttons, so a disabled button
+    /// stops the mouse and nothing else. Without this, reading an old run and
+    /// pressing F4 out of habit would land a verdict in today's run, silently,
+    /// on whatever step happened to be selected.
     fn recording_target(&self) -> Option<(String, usize)> {
-        let (recording, target) = {
+        let (recording, reading, target) = {
             let state = self.state.borrow();
             let target = state
                 .suite
@@ -998,8 +934,15 @@ impl JafizApp {
                 .and_then(|(suite, index)| suite.scenarios.get(index))
                 .map(|scenario| scenario.id.clone())
                 .zip(state.selected_step);
-            (state.run_file.active().is_some(), target)
+            let reading = viewing_other_run(&state).then(|| state.viewed_run.clone()).flatten();
+            (state.run_file.active().is_some(), reading, target)
         };
+        if let Some(id) = reading {
+            let tr = self.tr();
+            let body = tr.read_only.replace("%I", &id);
+            nwg::modal_info_message(&self.window.handle, tr.app_title, &body);
+            return None;
+        }
         if !recording {
             self.warn_no_run();
             return None;
@@ -1200,6 +1143,12 @@ impl JafizApp {
     /// The format contract, verbatim from the same text `jafiz format` prints —
     /// one source for what the parser accepts, so the GUI can never drift from
     /// what the CLI tells Claude.
+    ///
+    /// Dropped in `%TEMP%` and handed to the shell rather than shown in a
+    /// message box: the guide is pages of Markdown with examples in it, and a
+    /// message box would stack that into one unscrollable column of plain text.
+    /// Opening it by association also puts it in whatever the user already
+    /// reads Markdown with, where they can copy from it.
     fn show_format_help(&self) {
         let (tr, guide) = {
             let state = self.state.borrow();
@@ -1209,6 +1158,20 @@ impl JafizApp {
             };
             (t(state.lang), guide)
         };
+        let path = std::env::temp_dir().join(GUIDE_FILE);
+        // The two languages share one file name on purpose: the guide is
+        // rewritten on every open, so switching language and asking again
+        // replaces it rather than leaving two half-read copies behind.
+        if std::fs::write(&path, guide).is_ok() {
+            // `explorer.exe <file>` opens it with its associated program.
+            // Nothing is done with the exit status: explorer routinely returns
+            // non-zero after handing the file off successfully.
+            if std::process::Command::new("explorer.exe").arg(&path).spawn().is_ok() {
+                return;
+            }
+        }
+        // No writable temp folder, or no shell to hand it to. A cramped guide
+        // still beats no guide.
         nwg::modal_info_message(
             &self.window.handle,
             tr.menu_help_format.trim_end_matches('…'),
@@ -1222,8 +1185,229 @@ impl JafizApp {
         nwg::modal_info_message(&self.window.handle, tr.about_title, &body);
     }
 
-    /// Menu commands that are routed but not implemented yet: the run history
-    /// and the report and preferences actions. Routing them now is what keeps
-    /// every menu handle live and the whole menu bar readable in one match.
-    fn not_wired_yet(&self) {}
+    /// The report the window would hand Claude right now: the run on screen,
+    /// in the chosen language. `None` when no suite is open — there is nothing
+    /// to report about, and an empty clipboard is not an improvement.
+    fn report_text(&self) -> Option<String> {
+        let state = self.state.borrow();
+        let suite = state.suite.as_ref()?;
+        Some(report::report(suite, viewed_run(&state), state.lang))
+    }
+
+    /// Puts the report on the clipboard — the whole outbound path in one menu
+    /// command, because the alternative is the tester retyping what they just
+    /// spent twenty minutes finding out.
+    fn copy_report(&self) {
+        let Some(text) = self.report_text() else { return };
+        nwg::Clipboard::set_data_text(&self.window, &text);
+        // Transient by design: the next refresh puts the run's own status back.
+        self.status_bar.set_text(0, self.tr().copied);
+    }
+
+    /// Writes the same text to a file the tester picks, suggested as
+    /// `<suite>-<run id>.md` next to the suite — a report worth keeping is
+    /// usually one that goes into a ticket or a commit.
+    fn save_report(&self) {
+        let Some(text) = self.report_text() else { return };
+        // Everything the dialog needs is read out before it opens: it pumps
+        // messages, and a `Notice` arriving inside it re-enters `drain_dialog`.
+        let (folder, suggested, title, filters) = {
+            let state = self.state.borrow();
+            let tr = t(state.lang);
+            let stem = state.suite.as_ref().map(|s| s.stem.as_str()).unwrap_or("jafiz");
+            let suggested = match viewed_run(&state) {
+                Some(run) => format!("{stem}-{}.md", run.id),
+                None => format!("{stem}.md"),
+            };
+            (
+                state.location.clone(),
+                suggested,
+                tr.menu_report_save.trim_end_matches('…'),
+                [tr.filter_md, tr.filter_all],
+            )
+        };
+        let Some(path) = save_file_dialog(&self.window, title, &folder, &suggested, &filters)
+        else {
+            return;
+        };
+        if let Err(error) = std::fs::write(&path, &text) {
+            let message = format!("{}: {error}", path.display());
+            nwg::modal_error_message(&self.window.handle, self.tr().app_title, &message);
+            return;
+        }
+        let saved = self.tr().saved.replace("%P", &path.display().to_string());
+        self.status_bar.set_text(0, &saved);
+    }
+
+    /// Opens the run history. The rows are rendered here, on the UI thread,
+    /// because computing progress needs the suite — and the dialog thread has
+    /// no business borrowing the window's state.
+    fn show_history(&self) {
+        let prepared = {
+            let state = self.state.borrow();
+            let Some(suite) = state.suite.as_ref() else { return };
+            let tr = t(state.lang);
+            // Newest first: the run someone goes looking for is nearly always
+            // a recent one, and `RunFile::runs` is stored oldest first.
+            let rows: Vec<history_dialog::HistoryRow> = state
+                .run_file
+                .runs
+                .iter()
+                .rev()
+                .map(|run| {
+                    let counts = tally(suite, Some(run));
+                    history_dialog::HistoryRow {
+                        id: run.id.clone(),
+                        cells: [
+                            run.id.clone(),
+                            run.started_at.clone(),
+                            run.finished_at.clone().unwrap_or_else(|| tr.hist_running.into()),
+                            run.environment.clone(),
+                            format!("{}/{}", counts.done_steps, counts.total_steps),
+                        ],
+                    }
+                })
+                .collect();
+            // Start on the run already on screen, so OK without touching
+            // anything is a no-op rather than a jump.
+            let showing = viewed_run(&state).map(|run| run.id.clone());
+            let selected = showing.and_then(|id| rows.iter().position(|row| row.id == id));
+            (state.lang, rows, selected)
+        };
+        let (lang, rows, selected) = prepared;
+        if rows.is_empty() {
+            self.warn_no_run();
+            return;
+        }
+        self.window.set_enabled(false);
+        history_dialog::spawn(history_dialog::HistoryParams {
+            lang,
+            rows,
+            selected,
+            shared: Arc::clone(&self.shared),
+            notify: self.notice.sender(),
+        });
+    }
+
+    /// Points the window at the run picked in Histórico.
+    fn apply_viewed_run(&self, id: &str) {
+        {
+            let mut state = self.state.borrow_mut();
+            // Picking the active run clears the override rather than storing
+            // its id: `viewed_run: None` is the same run, and it is the state
+            // the read-only banner and the disabled buttons key off.
+            state.viewed_run = match state.run_file.active_run.as_deref() {
+                Some(active) if active == id => None,
+                _ => Some(id.to_string()),
+            };
+        }
+        self.refresh_all();
+    }
+
+    /// Opens the preferences window — the same section-sidebar dialog MCP
+    /// Console uses, over JAFIZ's own string table.
+    fn open_preferences(&self) {
+        let lang = self.state.borrow().lang;
+        self.window.set_enabled(false);
+        preferences_dialog::spawn(preferences_dialog::PreferencesParams {
+            lang,
+            shared: Arc::clone(&self.shared),
+            notify: self.notice.sender(),
+        });
+    }
+
+    /// Switches language in place, exactly as MCP Console does: the window
+    /// keeps its suite, its run and its selection, and every caption is
+    /// rewritten. Restarting to see a menu in another language would mean
+    /// losing the run in progress.
+    fn apply_language(&self, lang: Lang) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            let changed = state.lang != lang;
+            state.lang = lang;
+            state.settings.lang = lang;
+            changed
+        };
+        if !changed {
+            return;
+        }
+        // The CLI reads the same setting, so a report asked for in another
+        // terminal comes back in the language just chosen here.
+        let outcome = self.state.borrow().settings.save();
+        if let Err(error) = outcome {
+            nwg::modal_error_message(&self.window.handle, self.tr().app_title, &error);
+        }
+        self.relabel_all();
+    }
+}
+
+/// A Save-as dialog with the file name already filled in.
+///
+/// `nwg::FileDialog` cannot do that: its builder has no default-name option,
+/// and it keeps its `IFileDialog` pointer private, so `SetFileName` is out of
+/// reach. Suggesting `<suite>-<run id>.md` is most of the point of this command
+/// — the tester should be able to press Save, not compose a file name — so it
+/// goes straight to `GetSaveFileNameW`, which takes the suggestion in the very
+/// buffer it writes the answer back into. Returns `None` when cancelled.
+fn save_file_dialog(
+    parent: &nwg::Window,
+    title: &str,
+    folder: &std::path::Path,
+    suggested: &str,
+    filters: &[&str; 2],
+) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use winapi::um::commdlg::{
+        GetSaveFileNameW, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT,
+        OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
+
+    // The suggestion goes in, the chosen path comes back out, in one buffer.
+    // 32K UTF-16 units is the ceiling the shell itself works to.
+    let mut file = wide(suggested);
+    file.resize(32768, 0);
+
+    // comdlg32 wants NUL-separated label/pattern pairs closed by a second NUL —
+    // not something a plain string can carry.
+    let mut filter: Vec<u16> = Vec::new();
+    for (label, pattern) in [(filters[0], "*.md"), (filters[1], "*.*")] {
+        filter.extend(wide(label));
+        filter.extend(wide(pattern));
+    }
+    filter.push(0);
+
+    let dir: Vec<u16> =
+        folder.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let title = wide(title);
+    let extension = wide("md");
+
+    let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+    ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+    ofn.hwndOwner = parent.handle.hwnd().unwrap_or(std::ptr::null_mut());
+    ofn.lpstrFilter = filter.as_ptr();
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFile = file.as_mut_ptr();
+    ofn.nMaxFile = file.len() as u32;
+    ofn.lpstrInitialDir = if folder.is_dir() { dir.as_ptr() } else { std::ptr::null() };
+    ofn.lpstrTitle = title.as_ptr();
+    // Appended when the tester types a bare name, so "checkout" still lands as
+    // a `.md` the way the filter promises.
+    ofn.lpstrDefExt = extension.as_ptr();
+    // NOCHANGEDIR matters more than it looks: without it the dialog leaves the
+    // process sitting in whatever folder was browsed, and the suite-location
+    // cascade walks up from the current directory.
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+
+    // SAFETY: `ofn` is zeroed, so no field is left uninitialised; every pointer
+    // it holds refers to a NUL-terminated buffer that outlives the call; and
+    // `lpstrFile` is writable with `nMaxFile` units of room, which is what the
+    // dialog writes the answer into.
+    let confirmed = unsafe { GetSaveFileNameW(&mut ofn) };
+    if confirmed == 0 {
+        return None; // cancelled, or the dialog could not be shown
+    }
+    let end = file.iter().position(|&unit| unit == 0).unwrap_or(file.len());
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&file[..end])))
 }

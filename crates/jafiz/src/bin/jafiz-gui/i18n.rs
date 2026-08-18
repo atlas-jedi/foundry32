@@ -1,5 +1,5 @@
-//! Bilingual (pt-BR / en) strings for the JAFIZ GUI. `%C`/`%D`/`%I`/`%N`/`%S`/
-//! `%V` are filled in at use. The `Lang` selector and system detection are
+//! Bilingual (pt-BR / en) strings for the JAFIZ GUI. `%C`/`%D`/`%I`/`%N`/`%P`/
+//! `%S`/`%V` are filled in at use. The `Lang` selector and system detection are
 //! shared workspace-wide.
 
 // `detect_system_lang` is not re-exported here the way WITN's table does it:
@@ -7,15 +7,13 @@
 // directly and an unused re-export is a hard error under `-D warnings`.
 pub use foundry_common::lang::Lang;
 
-// The window is built in layers, so three fields below still carry their own
-// `#[allow(dead_code)]`: the recent-locations submenu and the report actions
-// get their call sites in the task that adds run browsing and report export.
-// Splitting the table across those tasks would mean the pt-BR and en wording of
-// one feature no longer sits side by side, which is the only reason this file
-// exists — and an unused field is a hard error under `-D warnings`. The
-// exemption is per-field on purpose: it covers exactly the strings that have no
-// caller yet, and disappears one attribute at a time as each is wired up —
-// recording took nine of the original twelve with it.
+// One field below still carries its own `#[allow(dead_code)]`: `menu_recent`
+// names the recent-locations submenu, a feature the settings file already
+// records the data for (`AppSettings::locations`) but no menu shows yet.
+// Deleting the wording would mean the pt-BR and en halves of that feature stop
+// sitting side by side, which is the only reason this file exists — and an
+// unused field is a hard error under `-D warnings`. The exemption is per-field
+// on purpose, and every string with a caller has had it removed.
 pub struct T {
     pub app_title: &'static str,
     // Menu bar.
@@ -75,9 +73,11 @@ pub struct T {
     pub diagnostics: &'static str,
     /// `%S` the file name, `%E` the OS error — the suite could not be read.
     pub read_error: &'static str,
-    /// `%C` scenario, `%S` step.
-    #[allow(dead_code)]
-    pub testing_now: &'static str,
+    /// `%I` — the run being read instead of the one recording goes to.
+    pub viewing_run: &'static str,
+    /// `%I` — said out loud when a verdict key is pressed while reading an old
+    /// run, which the disabled buttons alone cannot prevent.
+    pub read_only: &'static str,
     // Dialogs.
     pub run_dlg_title: &'static str,
     pub run_dlg_env: &'static str,
@@ -85,8 +85,27 @@ pub struct T {
     /// `%C` scenario, `%S` step.
     pub note_dlg_title: &'static str,
     pub note_dlg_hint: &'static str,
-    #[allow(dead_code)]
+    // Run history.
+    pub hist_hint: &'static str,
+    pub hist_col_run: &'static str,
+    pub hist_col_started: &'static str,
+    pub hist_col_finished: &'static str,
+    pub hist_col_env: &'static str,
+    pub hist_col_progress: &'static str,
+    /// Shown in the "finished" column of a run that has not been closed.
+    pub hist_running: &'static str,
+    // Preferences.
+    pub pref_title: &'static str,
+    pub pref_section_interface: &'static str,
+    pub pref_lang: &'static str,
+    pub pref_hint: &'static str,
+    // Report export.
     pub copied: &'static str,
+    /// `%P` — where the report was written.
+    pub saved: &'static str,
+    /// File-dialog filter labels.
+    pub filter_md: &'static str,
+    pub filter_all: &'static str,
     pub finish_title: &'static str,
     /// `%I` — the run id.
     pub finish_body: &'static str,
@@ -142,13 +161,28 @@ static PT: T = T {
     no_run: "Nenhuma execução. Use Execução ▸ Nova execução…",
     diagnostics: "⚠ %N problema(s) no arquivo",
     read_error: "Falha ao ler %S: %E",
-    testing_now: "testando agora: %C passo %S",
+    viewing_run: "lendo a execução %I — a gravação continua na execução ativa",
+    read_only: "Você está lendo a execução %I, que é só leitura.\r\n\r\nPara marcar passos, volte à execução ativa em Execução ▸ Histórico…",
     run_dlg_title: "Nova execução",
     run_dlg_env: "Ambiente / build:",
     run_dlg_hint: "URL, versão, browser, usuário de teste — entra no relatório.",
     note_dlg_title: "Observação — %C passo %S",
     note_dlg_hint: "O que aconteceu? Entra no relatório abaixo do veredito.",
+    hist_hint: "Escolha uma execução para ler. Marcar passos continua indo para a execução ativa.",
+    hist_col_run: "Execução",
+    hist_col_started: "Início",
+    hist_col_finished: "Fim",
+    hist_col_env: "Ambiente",
+    hist_col_progress: "Passos",
+    hist_running: "em andamento",
+    pref_title: "Preferências",
+    pref_section_interface: "Interface",
+    pref_lang: "Idioma:",
+    pref_hint: "A alteração é aplicada imediatamente.",
     copied: "Relatório copiado para a área de transferência.",
+    saved: "Relatório salvo em %P",
+    filter_md: "Markdown (*.md)",
+    filter_all: "Todos os arquivos (*.*)",
     finish_title: "Finalizar execução",
     finish_body: "Encerrar a execução %I? Ela deixa de aceitar novas marcações.",
     stale_marker: "!",
@@ -202,13 +236,28 @@ static EN: T = T {
     no_run: "No run yet. Use Run ▸ New run…",
     diagnostics: "⚠ %N problem(s) in the file",
     read_error: "Could not read %S: %E",
-    testing_now: "testing now: %C step %S",
+    viewing_run: "reading run %I — recording still goes to the active run",
+    read_only: "You are reading run %I, which is read-only.\r\n\r\nTo mark steps, go back to the active run under Run ▸ History…",
     run_dlg_title: "New run",
     run_dlg_env: "Environment / build:",
     run_dlg_hint: "URL, version, browser, test user — it goes into the report.",
     note_dlg_title: "Note — %C step %S",
     note_dlg_hint: "What happened? It goes into the report under the verdict.",
+    hist_hint: "Pick a run to read. Marking steps still goes to the active run.",
+    hist_col_run: "Run",
+    hist_col_started: "Started",
+    hist_col_finished: "Finished",
+    hist_col_env: "Environment",
+    hist_col_progress: "Steps",
+    hist_running: "in progress",
+    pref_title: "Preferences",
+    pref_section_interface: "Interface",
+    pref_lang: "Language:",
+    pref_hint: "The change is applied immediately.",
     copied: "Report copied to the clipboard.",
+    saved: "Report saved to %P",
+    filter_md: "Markdown (*.md)",
+    filter_all: "All files (*.*)",
     finish_title: "Finish run",
     finish_body: "End run %I? It stops accepting new verdicts.",
     stale_marker: "!",

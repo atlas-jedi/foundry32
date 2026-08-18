@@ -7,10 +7,11 @@
 //! make the tester type into a keyhole.
 
 use crate::i18n::{t, Lang};
-use crate::Shared;
+use crate::{DialogGuard, DialogSlot, Shared};
 use foundry_common::theme::apply_classic_button_theme;
 use native_windows_gui as nwg;
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const MARGIN: i32 = 12;
@@ -46,6 +47,11 @@ pub fn spawn(params: NoteParams) {
 fn run_dialog(params: NoteParams) {
     let NoteParams { lang, note, title, shared, notify } = params;
     let tr = t(lang);
+
+    // See `run_dialog` — the one-Notice flag, armed before the first `.expect`
+    // so `DialogGuard` can hand the main window back if construction panics.
+    let sent = Rc::new(Cell::new(false));
+    let _guard = DialogGuard::new(Rc::clone(&sent), DialogSlot::Note, Arc::clone(&shared), notify);
 
     let mut window = nwg::Window::default();
     nwg::Window::builder()
@@ -123,9 +129,6 @@ fn run_dialog(params: NoteParams) {
     let window_handle = window.handle;
     let ok_handle = ok_btn.handle;
     let cancel_handle = cancel_btn.handle;
-    // See `run_dialog::send_outcome` — the guard has to live on this thread,
-    // not in the mailbox the UI thread empties.
-    let sent = Cell::new(false);
     let handler = nwg::full_bind_event_handler(&window_handle, move |evt, evt_data, handle| {
         use nwg::Event as E;
         match evt {

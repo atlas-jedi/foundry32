@@ -13,9 +13,12 @@ description = "Já fiz? — run manual test scenarios step by step, record what 
 [dependencies]
 foundry-common = { path = "../foundry-common" }
 serde_json = "1"
+# `commdlg` is for the GUI's Save-as box: nwg's FileDialog has no way to suggest
+# a file name, so `jafiz-gui` calls GetSaveFileNameW itself. Not a new
+# dependency — native-windows-gui already turns the same feature on.
 winapi = { version = "0.3.9", features = [
     "winbase", "minwinbase", "sysinfoapi", "wincon", "winuser", "commctrl",
-    "libloaderapi", "processenv",
+    "libloaderapi", "processenv", "commdlg",
 ] }
 native-windows-gui = { version = "1.0.13", features = [
     "list-view", "notice", "status-bar", "message-window", "menu", "combobox",
