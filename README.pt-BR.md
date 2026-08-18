@@ -32,6 +32,7 @@ embutida como fallback offline.
 | Ferramenta | O que faz |
 |---|---|
 | **MCP Console** | Mostra e gerencia todos os MCP servers que o seu [Claude Code](https://code.claude.com) conhece — respondendo com clareza a *"se eu alterar isto aqui, altera também nos meus outros computadores?"* Rotula o alcance de cada servidor (conta / máquina / projeto), mostra o status de saúde e edita os baseados em arquivo via CLI oficial `claude mcp` (nunca editando `~/.claude.json` na mão). Mostra os **nomes** das variáveis de ambiente; valores nunca são lidos. |
+| **WITN** | *Where Is The Node?* — responde "qual desses vinte `node.exe` está ocupando a porta 3000?". Lista cada processo Node agrupado em árvore, nomeando o **app** por trás dele (projeto a partir do `package.json`, script ou ferramenta a partir da linha de comando), com pasta, portas em escuta, RAM, CPU e tempo de atividade. Clique em qualquer cabeçalho de coluna para ordenar por ele (crescente, decrescente, depois de volta à árvore). Encerra uma árvore de processos inteira com um clique, e abre a pasta do app no Explorer. Também instala um CLI `witn` **no seu PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
 | **JAFIZ** | *Já fiz?* — cenários de teste manual que sobrevivem à conversa. O Claude escreve a suíte como Markdown comum; você a executa e marca **cada passo** como passou, falhou, bloqueado ou pulado, com observação e evidência; o Claude lê o resultado de volta com `jafiz report` — sem copiar e colar em nenhuma direção. Mantém um histórico completo das execuções, com o ambiente de cada passagem. Também instala um CLI `jafiz` **no seu PATH**: `jafiz list`, `jafiz check`, `jafiz report`. |
 
 Mais ferramentas entram no catálogo com o tempo — o hub as reconhece sem
@@ -68,7 +69,7 @@ cargo +stable-i686-pc-windows-gnu build --release --workspace
 ```
 
 Isso produz `target/i686-pc-windows-gnu/release/foundry32.exe`,
-`mcp-console.exe`, `jafiz.exe` e `jafiz-gui.exe`. Builds locais com GNU também
+`mcp-console.exe`, `witn.exe`, `witn-gui.exe`, `jafiz.exe` e `jafiz-gui.exe`. Builds locais com GNU também
 precisam dos binutils do MinGW-w64 i686 (`as`, `ar`, `windres`) no PATH — o
 toolchain embutido do rustup cobre apenas a linkedição. Os binários de release
 são compilados no CI com `--target i686-pc-windows-msvc` (x86 — menor em disco
@@ -76,7 +77,8 @@ e RAM) e não têm esse requisito.
 
 Modos headless para script/verificação: `foundry32.exe --dump-catalog [arquivo]`
 e `--check-update [arquivo]`; `mcp-console.exe --dump [arquivo]`;
-`jafiz.exe list` / `check <arquivo>` / `--dump [arquivo]`.
+`witn.exe list` / `--dump [arquivo]`; `jafiz.exe list` / `check <arquivo>` /
+`--dump [arquivo]`.
 
 ## Licença
 
