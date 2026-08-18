@@ -31,3 +31,9 @@ jobs:
           path: |
             target/i686-pc-windows-msvc/release/witn.exe
             target/i686-pc-windows-msvc/release/witn-gui.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jafiz-x86
+          path: |
+            target/i686-pc-windows-msvc/release/jafiz.exe
+            target/i686-pc-windows-msvc/release/jafiz-gui.exe

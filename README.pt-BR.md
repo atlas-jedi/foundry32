@@ -32,6 +32,7 @@ embutida como fallback offline.
 | Ferramenta | O que faz |
 |---|---|
 | **MCP Console** | Mostra e gerencia todos os MCP servers que o seu [Claude Code](https://code.claude.com) conhece — respondendo com clareza a *"se eu alterar isto aqui, altera também nos meus outros computadores?"* Rotula o alcance de cada servidor (conta / máquina / projeto), mostra o status de saúde e edita os baseados em arquivo via CLI oficial `claude mcp` (nunca editando `~/.claude.json` na mão). Mostra os **nomes** das variáveis de ambiente; valores nunca são lidos. |
+| **JAFIZ** | *Já fiz?* — cenários de teste manual que sobrevivem à conversa. O Claude escreve a suíte como Markdown comum; você a executa e marca **cada passo** como passou, falhou, bloqueado ou pulado, com observação e evidência; o Claude lê o resultado de volta com `jafiz report` — sem copiar e colar em nenhuma direção. Mantém um histórico completo das execuções, com o ambiente de cada passagem. Também instala um CLI `jafiz` **no seu PATH**: `jafiz list`, `jafiz check`, `jafiz report`. |
 
 Mais ferramentas entram no catálogo com o tempo — o hub as reconhece sem
 precisar de uma nova versão do Foundry32.
@@ -66,15 +67,16 @@ rustup toolchain install stable-i686-pc-windows-gnu --profile minimal
 cargo +stable-i686-pc-windows-gnu build --release --workspace
 ```
 
-Isso produz `target/i686-pc-windows-gnu/release/foundry32.exe` e
-`mcp-console.exe`. Builds locais com GNU também precisam dos binutils do
-MinGW-w64 i686 (`as`, `ar`, `windres`) no PATH — o toolchain embutido do rustup
-cobre apenas a linkedição. Os binários de release são compilados no CI com
-`--target i686-pc-windows-msvc` (x86 — menor em disco e RAM) e não têm esse
-requisito.
+Isso produz `target/i686-pc-windows-gnu/release/foundry32.exe`,
+`mcp-console.exe`, `jafiz.exe` e `jafiz-gui.exe`. Builds locais com GNU também
+precisam dos binutils do MinGW-w64 i686 (`as`, `ar`, `windres`) no PATH — o
+toolchain embutido do rustup cobre apenas a linkedição. Os binários de release
+são compilados no CI com `--target i686-pc-windows-msvc` (x86 — menor em disco
+e RAM) e não têm esse requisito.
 
 Modos headless para script/verificação: `foundry32.exe --dump-catalog [arquivo]`
-e `--check-update [arquivo]`; `mcp-console.exe --dump [arquivo]`.
+e `--check-update [arquivo]`; `mcp-console.exe --dump [arquivo]`;
+`jafiz.exe list` / `check <arquivo>` / `--dump [arquivo]`.
 
 ## Licença
 
