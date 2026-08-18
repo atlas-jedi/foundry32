@@ -172,7 +172,11 @@ pub fn load_runs(dir: &Path, stem: &str) -> RunFile {
     let Ok(value) = serde_json::from_str::<Value>(&text) else { return empty };
     let runs = value["runs"].as_array().map(|a| a.iter().map(run_from_json).collect());
     RunFile {
-        suite: value["suite"].as_str().unwrap_or(stem).to_string(),
+        // The filename is the identity, not the JSON's own `suite` field:
+        // a run file copied alongside its suite still names the original, and
+        // trusting it would make the next verdict overwrite that suite's
+        // history instead of this one's.
+        suite: stem.to_string(),
         active_run: value["active_run"].as_str().map(str::to_string),
         runs: runs.unwrap_or_default(),
     }
@@ -180,6 +184,11 @@ pub fn load_runs(dir: &Path, stem: &str) -> RunFile {
 
 /// Writes a suite's run history as pretty-printed JSON — readable when
 /// someone opens it directly, and diffable once it lands in git.
+///
+/// The destination comes from `file.suite`, which is only ever the stem the
+/// history was loaded (or started) under — never the `suite` field read back
+/// out of the JSON, which a copied file gets wrong. The field is still
+/// written, because it tells a human which suite an opened file belongs to.
 pub fn save_runs(dir: &Path, file: &RunFile) -> Result<(), String> {
     let path = runs_path(dir, &file.suite);
     if let Some(parent) = path.parent() {
