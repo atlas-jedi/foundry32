@@ -389,14 +389,12 @@ fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
 
 /// The whole suite, every step annotated with its status — `jafiz show`.
 ///
-/// Deliberately does not append `orphan_section`: this view's whole promise
-/// is to walk the *suite's* own steps, one line per step, with no tally and
-/// no claim of completeness for anything beyond that — unlike `report`,
-/// which computes counts a reader trusts as the full outcome and where a
-/// dropped orphan would falsify them. A human running `show` to read a
-/// suite's shape is not auditing recorded results; `report` (and `status`,
-/// which quotes its `Progresso:` line) is the one place an orphan silently
-/// vanishing would be a lie, and that is now fixed there.
+/// Appends `orphan_section` for the same reason `report` does: a recorded
+/// **failure** against a scenario or step the suite no longer has is
+/// invisible to a human reading this view unless it is listed somewhere, and
+/// `show` walks the *suite's* own steps, one line per step, so an orphaned
+/// result is never reached by that walk. Reusing `orphan_section` rather than
+/// duplicating it keeps the wording and sort order identical to `report`'s.
 pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     let tr = t(lang);
     let mut out = header(suite, run, lang);
@@ -436,6 +434,9 @@ pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 }
             }
         }
+    }
+    if let Some(run) = run {
+        out.push_str(&orphan_section(suite, run, tr));
     }
     out
 }
