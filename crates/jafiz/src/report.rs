@@ -12,7 +12,7 @@
 //! back in the language the user chose in the GUI.
 
 use crate::model::{
-    scenario_done, scenario_status, tally, Run, ScenarioStatus, Scenario, StepStatus, Suite,
+    scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, StepStatus, Suite,
 };
 use foundry_common::lang::Lang;
 
@@ -32,6 +32,8 @@ struct T {
     verdict_blocked: &'static str,
     verdict_skip: &'static str,
     evidence: &'static str,
+    label_tags: &'static str,
+    label_pre: &'static str,
     section_passed: &'static str,
     section_pending: &'static str,
     step_count: &'static str,
@@ -57,6 +59,8 @@ static PT: T = T {
     verdict_blocked: "BLOQUEADO",
     verdict_skip: "PULADO",
     evidence: "evidência",
+    label_tags: "tags:",
+    label_pre: "pré:",
     section_passed: "Passaram",
     section_pending: "Não executados",
     step_count: "%N passos",
@@ -82,6 +86,8 @@ static EN: T = T {
     verdict_blocked: "BLOCKED",
     verdict_skip: "SKIPPED",
     evidence: "evidence",
+    label_tags: "tags:",
+    label_pre: "pre:",
     section_passed: "Passed",
     section_pending: "Not executed",
     step_count: "%N steps",
@@ -168,13 +174,19 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     let mut out = header(suite, run, lang);
     let Some(run) = run else { return out };
 
-    // Problems first, in suite order, each with the offending step verbatim.
+    // Anything needing attention comes first, in suite order, with the
+    // offending step verbatim. Skipped steps qualify: `scenario_status` rolls
+    // an all-skipped scenario up to `Pass`, and a scenario nobody executed
+    // reading as verified is the one lie this report must never tell.
     for scenario in &suite.scenarios {
-        let status = scenario_status(scenario, Some(run));
-        if !matches!(status, ScenarioStatus::Fail | ScenarioStatus::Blocked) {
+        if !needs_detail(scenario, run) {
             continue;
         }
-        out.push_str(&format!("\n## {} {}\n", status.symbol(), heading(scenario)));
+        out.push_str(&format!(
+            "\n## {} {}\n",
+            detail_symbol(scenario, run),
+            heading(scenario)
+        ));
         for step in &scenario.steps {
             let Some(result) = run.result(&scenario.id, step.number) else { continue };
             let verdict = match result.status {
@@ -207,11 +219,16 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     let mut passed = Vec::new();
     let mut pending = Vec::new();
     for scenario in &suite.scenarios {
+        if needs_detail(scenario, run) {
+            continue; // already rendered in full above
+        }
         let line = format!(
             "- {} ({})\n",
             heading(scenario),
             tr.step_count.replace("%N", &scenario.steps.len().to_string())
         );
+        // Exhaustive on purpose: a new ScenarioStatus variant must force a
+        // decision here rather than silently vanishing from every report.
         match scenario_status(scenario, Some(run)) {
             ScenarioStatus::Pass => passed.push(line),
             ScenarioStatus::Pending => pending.push(line),
@@ -221,7 +238,7 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 scenario_done(scenario, Some(run)),
                 scenario.steps.len()
             )),
-            _ => {}
+            ScenarioStatus::Fail | ScenarioStatus::Blocked => {}
         }
     }
     if !passed.is_empty() {
@@ -235,6 +252,34 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     out
 }
 
+/// True when a scenario must be rendered in full rather than summarised: it
+/// failed, it was blocked, or a step was skipped. The skip case is why this
+/// is not just a status check — `scenario_status` counts a skip as decided,
+/// so an all-skipped scenario rolls up to `Pass` and would otherwise collapse
+/// into the one-line "passed" list, taking the tester's note with it.
+fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
+    if matches!(
+        scenario_status(scenario, Some(run)),
+        ScenarioStatus::Fail | ScenarioStatus::Blocked
+    ) {
+        return true;
+    }
+    scenario
+        .steps
+        .iter()
+        .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
+}
+
+/// The heading symbol for a detailed scenario: its own status, except that one
+/// detailed only because steps were skipped is marked skipped, never passed.
+fn detail_symbol(scenario: &Scenario, run: &Run) -> &'static str {
+    let status = scenario_status(scenario, Some(run));
+    match status {
+        ScenarioStatus::Fail | ScenarioStatus::Blocked => status.symbol(),
+        _ => StepStatus::Skip.symbol(),
+    }
+}
+
 /// The whole suite, every step annotated with its status — `jafiz show`.
 pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     let tr = t(lang);
@@ -246,10 +291,10 @@ pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
             heading(scenario)
         ));
         if !scenario.tags.is_empty() {
-            out.push_str(&format!("tags: {}\n", scenario.tags.join(", ")));
+            out.push_str(&format!("{} {}\n", tr.label_tags, scenario.tags.join(", ")));
         }
         if !scenario.precondition.is_empty() {
-            out.push_str(&format!("pré: {}\n", scenario.precondition));
+            out.push_str(&format!("{} {}\n", tr.label_pre, scenario.precondition));
         }
         for step in &scenario.steps {
             let result = run.and_then(|r| r.result(&scenario.id, step.number));
@@ -261,6 +306,12 @@ pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 step_text(&step.action, &step.expected)
             ));
             if let Some(result) = result {
+                // `show` is the view built to annotate every step, so it is
+                // exactly where a verdict recorded against wording the file no
+                // longer carries has to surface.
+                if crate::model::is_stale(step, result) {
+                    out.push_str(&format!("   {}\n", tr.stale));
+                }
                 if !result.note.is_empty() {
                     out.push_str(&format!("   — {}\n", result.note));
                 }
