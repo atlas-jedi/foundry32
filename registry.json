@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "registry_version": 3,
+  "registry_version": 4,
   "tools": [
     {
       "id": "mcp-console",
@@ -31,6 +31,28 @@
         {
           "exe": "witn.exe",
           "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.1.1/witn.exe",
+          "sha256": "",
+          "size_bytes": 0
+        }
+      ],
+      "expose_on_path": true
+    },
+    {
+      "id": "jafiz",
+      "name": "JAFIZ",
+      "publisher": "Software Imperial",
+      "description_en": "Já fiz? — run manual test scenarios step by step: mark every step pass, fail or blocked with a note and evidence, and hand the result back to Claude with `jafiz report`. Ships the jafiz CLI on your PATH.",
+      "description_pt": "Já fiz? — execute cenários de teste manual passo a passo: marque cada passo como passou, falhou ou bloqueado, com observação e evidência, e devolva o resultado ao Claude com `jafiz report`. Inclui o CLI jafiz no seu PATH.",
+      "version": "1.0.0",
+      "exe": "jafiz-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.0/jafiz-gui.exe",
+      "sha256": "",
+      "size_bytes": 0,
+      "homepage": "https://github.com/atlas-jedi/foundry32",
+      "companions": [
+        {
+          "exe": "jafiz.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.0/jafiz.exe",
           "sha256": "",
           "size_bytes": 0
         }

@@ -165,6 +165,8 @@ jobs:
             dist/mcp-console.exe
             dist/witn.exe
             dist/witn-gui.exe
+            dist/jafiz.exe
+            dist/jafiz-gui.exe
             dist/registry.json
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true

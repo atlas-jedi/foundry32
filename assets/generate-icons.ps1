@@ -1,8 +1,9 @@
-# Deterministic icon generator for the Foundry32 workspace. Produces three
+# Deterministic icon generator for the Foundry32 workspace. Produces four
 # multi-resolution .ico files with distinct classic-flavored motifs:
 #   Foundry32   -> a hot anvil (the forge/foundry)
 #   MCP Console -> a ">_" terminal prompt
 #   WITN        -> a magnifier over a node hexagon (finding the node)
+#   JAFIZ       -> a clipboard checklist (pass, fail, pending)
 # Run from anywhere: powershell -ExecutionPolicy Bypass -File assets\generate-icons.ps1
 Add-Type -AssemblyName System.Drawing
 
@@ -109,6 +110,59 @@ $DrawWitn = {
     }
 }
 
+# JAFIZ: a clipboard checklist — three short rule lines with a pass, a fail,
+# and a pending mark. Reads at 16 px as "a checklist with results".
+$DrawJafiz = {
+    param($g, [float]$s)
+    Draw-Plate $g $s (Argb 255 26 30 38)
+
+    $neutral = Argb 255 226 230 236
+    $gray = Argb 255 150 158 170
+
+    # Clipboard body.
+    $bodyBrush = New-Object System.Drawing.SolidBrush($neutral)
+    $g.FillRectangle($bodyBrush, ($s * 0.24), ($s * 0.22), ($s * 0.52), ($s * 0.62))
+    $bodyBrush.Dispose()
+
+    # Clip (metal clasp), overlapping the body's top edge.
+    $clipBrush = New-Object System.Drawing.SolidBrush($gray)
+    $g.FillRectangle($clipBrush, ($s * 0.40), ($s * 0.14), ($s * 0.20), ($s * 0.13))
+    $clipBrush.Dispose()
+
+    # The three short rule lines (text placeholders), one per checklist row.
+    $lineBrush = New-Object System.Drawing.SolidBrush($gray)
+    $g.FillRectangle($lineBrush, ($s * 0.46), ($s * 0.375), ($s * 0.24), ($s * 0.05))
+    $g.FillRectangle($lineBrush, ($s * 0.46), ($s * 0.54), ($s * 0.24), ($s * 0.05))
+    $g.FillRectangle($lineBrush, ($s * 0.46), ($s * 0.715), ($s * 0.24), ($s * 0.05))
+    $lineBrush.Dispose()
+
+    # Row 1: pass, a green check.
+    $checkPen = New-Object System.Drawing.Pen((Argb 255 92 219 132), ($s * 0.07))
+    $checkPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $checkPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $checkPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $checkPts = @(
+        (New-Object System.Drawing.PointF(($s * 0.275), ($s * 0.40))),
+        (New-Object System.Drawing.PointF(($s * 0.335), ($s * 0.455))),
+        (New-Object System.Drawing.PointF(($s * 0.435), ($s * 0.335)))
+    )
+    $g.DrawLines($checkPen, [System.Drawing.PointF[]]$checkPts)
+    $checkPen.Dispose()
+
+    # Row 2: fail, a red cross.
+    $crossPen = New-Object System.Drawing.Pen((Argb 255 232 92 92), ($s * 0.07))
+    $crossPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $crossPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $g.DrawLine($crossPen, ($s * 0.275), ($s * 0.525), ($s * 0.395), ($s * 0.605))
+    $g.DrawLine($crossPen, ($s * 0.395), ($s * 0.525), ($s * 0.275), ($s * 0.605))
+    $crossPen.Dispose()
+
+    # Row 3: pending, an empty checkbox.
+    $boxPen = New-Object System.Drawing.Pen($gray, ($s * 0.06))
+    $g.DrawRectangle($boxPen, ($s * 0.28), ($s * 0.685), ($s * 0.11), ($s * 0.11))
+    $boxPen.Dispose()
+}
+
 function Save-Ico([string]$outPath, $drawMotif) {
     $sizes = 16, 24, 32, 48, 64, 256
     $pngs = foreach ($size in $sizes) {
@@ -145,3 +199,4 @@ $root = Split-Path $PSScriptRoot -Parent
 Save-Ico (Join-Path $root 'crates\foundry32\assets\foundry32.ico') $DrawFoundry
 Save-Ico (Join-Path $root 'crates\mcp-console\assets\mcp-console.ico') $DrawConsole
 Save-Ico (Join-Path $root 'crates\witn\assets\witn.ico') $DrawWitn
+Save-Ico (Join-Path $root 'crates\jafiz\assets\jafiz.ico') $DrawJafiz
