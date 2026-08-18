@@ -78,6 +78,11 @@ struct UiState {
     /// Suite files in the current location, in list order.
     suite_paths: Vec<PathBuf>,
     suite: Option<Suite>,
+    /// Why the picked suite could not be read, already phrased for the status
+    /// bar. Kept apart from `suite: None`, which is what an empty folder looks
+    /// like — a file the picker lists but the loader could not open is a
+    /// different thing to tell the user.
+    load_error: Option<String>,
     diagnostics: Vec<Diagnostic>,
     run_file: RunFile,
     /// Index into `suite.scenarios`.
@@ -113,11 +118,20 @@ struct JafizApp {
     menu_prefs: nwg::MenuItem,
     menu_help_format: nwg::MenuItem,
     menu_about: nwg::MenuItem,
-    /// The top-level menu-bar entries. Nothing reads them, but `nwg::Menu`'s
-    /// `Drop` calls `DestroyMenu` — let these go out of scope at the end of
-    /// `build_app` and the whole menu bar, items included, is destroyed before
-    /// the window is ever shown.
-    _menus: Vec<nwg::Menu>,
+    // The five top-level menu-bar entries. Nothing reads them yet — hence the
+    // `_` prefix, which is what keeps `dead_code` quiet — but they cannot be
+    // locals: `nwg::Menu`'s `Drop` calls `DestroyMenu`, so letting them go out
+    // of scope at the end of `build_app` would destroy the whole menu bar,
+    // items included, before the window is ever shown. They are declared after
+    // the `MenuItem` fields on purpose: fields drop in declaration order, and
+    // `MenuItem`'s `Drop` calls `DeleteMenu` on its parent, which must still
+    // exist. Language switching will read them through
+    // `foundry_common::ui::set_submenu_text`, one named field each.
+    _menu_file: nwg::Menu,
+    _menu_run: nwg::Menu,
+    _menu_report: nwg::Menu,
+    _menu_tools: nwg::Menu,
+    _menu_help: nwg::Menu,
     state: RefCell<UiState>,
     shared: Arc<Mutex<Shared>>,
 }
@@ -275,7 +289,11 @@ fn build_app(settings: AppSettings) -> JafizApp {
         menu_prefs,
         menu_help_format,
         menu_about,
-        _menus: vec![menu_file, menu_run, menu_report, menu_tools, menu_help],
+        _menu_file: menu_file,
+        _menu_run: menu_run,
+        _menu_report: menu_report,
+        _menu_tools: menu_tools,
+        _menu_help: menu_help,
         state: RefCell::new(UiState {
             lang,
             settings,
@@ -283,6 +301,7 @@ fn build_app(settings: AppSettings) -> JafizApp {
             location_kind: LocationKind::Library,
             suite_paths: Vec::new(),
             suite: None,
+            load_error: None,
             diagnostics: Vec::new(),
             run_file: RunFile::default(),
             selected_scenario: None,
@@ -393,7 +412,13 @@ impl JafizApp {
         self.steps.set_position(steps_x, list_y);
         self.steps.set_size((width - steps_x - MARGIN).max(160) as u32, list_h);
 
-        let mut x = steps_x;
+        // Anchor the verdict row to the right edge: fixed-width buttons laid
+        // out from the steps list would run past the client area at the
+        // default window size. Below the width the row needs, it clamps to the
+        // left margin — the best a fixed-width row can do while staying
+        // on-screen from the left.
+        let total = 6 * BUTTON_W + 5 * BUTTON_GAP;
+        let mut x = (width - MARGIN - total).max(MARGIN);
         for button in [
             &self.btn_pass,
             &self.btn_fail,
@@ -408,28 +433,39 @@ impl JafizApp {
         }
     }
 
-    /// Opens whichever folder the user had last, falling back to the engine's
-    /// resolution cascade — so launching from the hub (cwd = the tool folder)
-    /// still lands on the library rather than nowhere.
+    /// Opens the folder this launch should show. The engine's cascade decides
+    /// first: `JAFIZ_DIR` or a project's `tests/manual` found from the cwd are
+    /// deliberate statements about *this* launch and outrank a folder
+    /// remembered from an earlier session. Only when the cascade falls through
+    /// to the central library does the remembered folder win.
     fn open_initial_location(&self) {
         // Both preferences are read before anything is loaded: opening the
         // folder immediately rewrites `last_suite` to whatever the picker
         // lands on, which would erase the suite we are about to restore.
-        let (remembered_dir, remembered_suite) = {
+        let (remembered, last_suite) = {
             let state = self.state.borrow();
             (state.settings.last_location.clone(), state.settings.last_suite.clone())
         };
-        // A remembered folder that has since been deleted must not strand the
-        // window on an empty list — fall through to the cascade instead.
-        let remembered_dir = remembered_dir.filter(|dir| dir.is_dir());
-        let location = store::resolve_location(remembered_dir.as_deref());
+        let cascade = store::resolve_location(None);
+        let location = match cascade.kind {
+            LocationKind::Env | LocationKind::Project => cascade,
+            // A remembered folder that has since been deleted must not strand
+            // the window on an empty list — fall through to the cascade.
+            _ => match remembered.filter(|dir| dir.is_dir()) {
+                Some(dir) => store::Location { dir, kind: LocationKind::Explicit },
+                None => cascade,
+            },
+        };
         self.load_location(&location.dir, location.kind);
-        if let Some(stem) = remembered_suite {
+        if let Some(stem) = last_suite {
             self.select_suite_by_stem(&stem);
         }
     }
 
     /// Reads the folder, fills the suite picker, and opens the first suite.
+    /// Deliberately free of side effects on the preferences: only the user
+    /// choosing a folder is worth remembering, and persisting every folder the
+    /// cascade produced is what would freeze the cascade from launch 2 onward.
     fn load_location(&self, dir: &std::path::Path, kind: LocationKind) {
         let paths = store::list_suites(dir);
         let names: Vec<String> = paths
@@ -441,19 +477,22 @@ impl JafizApp {
             state.location = dir.to_path_buf();
             state.location_kind = kind;
             state.suite_paths = paths;
-            state.settings.remember_location(dir);
-            let _ = state.settings.save();
         }
         self.suite_combo.set_collection(names);
         // Which rung of the cascade produced the folder is part of the answer
-        // to "why am I looking at these suites" — a `--dir`, `JAFIZ_DIR`, the
-        // enclosing project or the central library all look alike otherwise.
-        self.location_label.set_text(&format!(
-            "{} {} ({})",
-            self.tr().lbl_location,
-            dir.display(),
-            kind.label()
-        ));
+        // to "why am I looking at these suites" — a folder the user picked,
+        // `JAFIZ_DIR`, the enclosing project or the central library all look
+        // alike otherwise. The wording is the GUI's own: `LocationKind::label`
+        // is a pt-BR CLI constant and would leak into an English window.
+        let tr = self.tr();
+        let source = match kind {
+            LocationKind::Explicit => tr.loc_explicit,
+            LocationKind::Env => tr.loc_env,
+            LocationKind::Project => tr.loc_project,
+            LocationKind::Library => tr.loc_library,
+        };
+        self.location_label
+            .set_text(&format!("{} {} ({})", tr.lbl_location, dir.display(), source));
         self.suite_combo.set_selection(Some(0));
         self.load_selected_suite();
     }
@@ -470,15 +509,38 @@ impl JafizApp {
             // Deref — read the location out first instead of borrowing it
             // inside an assignment to a sibling field.
             let dir = state.location.clone();
+            let tr = t(state.lang);
+            state.load_error = None;
             match path.as_ref().map(|p| store::load_suite(p)) {
                 Some(Ok(outcome)) => {
                     state.run_file = store::load_runs(&dir, &outcome.suite.stem);
-                    state.settings.last_suite = Some(outcome.suite.stem.clone());
-                    let _ = state.settings.save();
+                    // Only write when it actually changed: every F5 and every
+                    // combo change comes through here, and settings.json is not
+                    // worth a disk write per keystroke.
+                    if state.settings.last_suite.as_deref() != Some(outcome.suite.stem.as_str()) {
+                        state.settings.last_suite = Some(outcome.suite.stem.clone());
+                        let _ = state.settings.save();
+                    }
                     state.diagnostics = outcome.diagnostics;
                     state.suite = Some(outcome.suite);
                 }
-                _ => {
+                // Deleted between the listing and this load, locked, or simply
+                // unreadable. Falling into the same arm as "nothing selected"
+                // would put "no suites in this folder" under a picker that is
+                // visibly listing suites — say what actually went wrong.
+                Some(Err(error)) => {
+                    let name = path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    state.load_error =
+                        Some(tr.read_error.replace("%S", &name).replace("%E", &error.to_string()));
+                    state.suite = None;
+                    state.diagnostics.clear();
+                    state.run_file = RunFile::default();
+                }
+                None => {
                     state.suite = None;
                     state.diagnostics.clear();
                     state.run_file = RunFile::default();
@@ -496,12 +558,18 @@ impl JafizApp {
     /// Points the picker at a named suite, if the current folder has one.
     /// Used to restore the suite the user had open last.
     fn select_suite_by_stem(&self, stem: &str) {
+        // `to_lowercase`, not `eq_ignore_ascii_case`: the CLI's own stem
+        // matching (`store::match_suites`) folds case that way, and a suite
+        // named `Ação.md` must not resolve differently in the two front-ends.
+        let wanted = stem.to_lowercase();
         let index = {
             let state = self.state.borrow();
             state
                 .suite_paths
                 .iter()
-                .position(|p| p.file_stem().is_some_and(|s| s.eq_ignore_ascii_case(stem)))
+                .position(|p| {
+                    p.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase() == wanted)
+                })
         };
         let Some(index) = index else { return };
         if self.suite_combo.selection() == Some(index) {
@@ -562,9 +630,10 @@ impl JafizApp {
         let text = {
             let state = self.state.borrow();
             let tr = t(state.lang);
-            let mut text = match state.suite.as_ref() {
-                None => tr.no_suites.replace("%D", &state.location.display().to_string()),
-                Some(suite) => match state.run_file.latest() {
+            let mut text = match (state.load_error.as_ref(), state.suite.as_ref()) {
+                (Some(error), _) => error.clone(),
+                (None, None) => tr.no_suites.replace("%D", &state.location.display().to_string()),
+                (None, Some(suite)) => match state.run_file.latest() {
                     None => format!("{} · {}", suite.title, tr.no_run),
                     Some(run) => report::status_line(suite, Some(run), state.lang),
                 },
@@ -640,7 +709,8 @@ impl JafizApp {
     }
 
     /// Picks a different suite folder. Chosen by hand, so it enters the
-    /// cascade as `Explicit` — the same rung `--dir` uses on the CLI.
+    /// cascade as `Explicit` — and this is the only path that remembers a
+    /// folder, because it is the only one where the user said which one.
     fn open_folder(&self) {
         let start = self.state.borrow().location.clone();
         let mut builder = nwg::FileDialog::builder()
@@ -657,14 +727,23 @@ impl JafizApp {
             return;
         }
         let Ok(chosen) = dialog.get_selected_item() else { return };
-        self.load_location(&PathBuf::from(chosen), LocationKind::Explicit);
+        let dir = PathBuf::from(chosen);
+        {
+            let mut state = self.state.borrow_mut();
+            state.settings.remember_location(&dir);
+            let _ = state.settings.save();
+        }
+        self.load_location(&dir, LocationKind::Explicit);
     }
 
-    /// Opens the "new run" dialog. The window is disabled for as long as the
-    /// dialog owns the interaction — the dialog runs on its own thread, so
-    /// nothing else enforces modality.
+    /// Opens the "new run" dialog.
+    ///
+    /// The real dialog will disable this window for as long as it owns the
+    /// interaction — it runs on its own thread, so nothing else enforces
+    /// modality. The stub puts no window on screen, so disabling here would
+    /// only make the main window flicker unusable for a frame and produce
+    /// nothing; `drain_dialog` re-enables either way.
     fn open_run_dialog(&self) {
-        self.window.set_enabled(false);
         run_dialog::spawn(run_dialog::RunDialogParams {
             shared: Arc::clone(&self.shared),
             notify: self.notice.sender(),
@@ -673,7 +752,6 @@ impl JafizApp {
 
     /// Opens the step-note dialog, on the same terms as `open_run_dialog`.
     fn open_note_dialog(&self) {
-        self.window.set_enabled(false);
         note_dialog::spawn(note_dialog::NoteDialogParams {
             shared: Arc::clone(&self.shared),
             notify: self.notice.sender(),
@@ -687,15 +765,14 @@ impl JafizApp {
     /// read and emptied — leaving a stale entry there would make the next
     /// dialog return someone else's answer.
     fn drain_dialog(&self) {
-        let answered = {
-            let mut shared = self.shared.lock().unwrap();
-            let environment = shared.environment.take();
-            let note = shared.note.take();
-            environment.is_some() || note.is_some()
-        };
-        if answered {
-            self.window.set_enabled(true);
-        }
+        // Unconditionally, and before the mailbox is even inspected: a dialog
+        // thread that panics or exits without writing an outcome would
+        // otherwise leave a `WS_DISABLED` top-level window the user cannot
+        // even close.
+        self.window.set_enabled(true);
+        let mut shared = self.shared.lock().unwrap();
+        let _ = shared.environment.take();
+        let _ = shared.note.take();
     }
 
     /// The format contract, verbatim from the same text `jafiz format` prints —

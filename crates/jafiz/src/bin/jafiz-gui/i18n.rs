@@ -7,21 +7,20 @@
 // directly and an unused re-export is a hard error under `-D warnings`.
 pub use foundry_common::lang::Lang;
 
-/// The GUI's whole string table.
-///
-/// `allow(dead_code)`: the table is written once and complete, but the window
-/// is built in layers — the recording dialogs, the finish-run confirmation and
-/// the report actions get their call sites in the tasks that add those
-/// features. Splitting the table across those tasks would mean the pt-BR and
-/// en wording of one dialog no longer sits side by side, which is the only
-/// reason this file exists; an unused field is a hard error under
-/// `-D warnings`, so the exemption is stated here instead.
-#[allow(dead_code)]
+// The window is built in layers, so a handful of fields below carry their own
+// `#[allow(dead_code)]`: the recording dialogs, the finish-run confirmation and
+// the report actions get their call sites in the tasks that add those features.
+// Splitting the table across those tasks would mean the pt-BR and en wording of
+// one dialog no longer sits side by side, which is the only reason this file
+// exists — and an unused field is a hard error under `-D warnings`. The
+// exemption is per-field on purpose: it covers exactly the strings that have no
+// caller yet, and disappears one attribute at a time as each is wired up.
 pub struct T {
     pub app_title: &'static str,
     // Menu bar.
     pub menu_file: &'static str,
     pub menu_open: &'static str,
+    #[allow(dead_code)]
     pub menu_recent: &'static str,
     pub menu_reload: &'static str,
     pub menu_exit: &'static str,
@@ -41,9 +40,15 @@ pub struct T {
     pub about_title: &'static str,
     /// `%V` — the app version.
     pub about_body: &'static str,
-    // Header row.
+    // Header row. The four `loc_*` are the GUI's own wording for a
+    // `store::LocationKind`: the engine's `label()` is a pt-BR CLI constant
+    // ("projeto", "biblioteca") and would leak into an English window.
     pub lbl_suite: &'static str,
     pub lbl_location: &'static str,
+    pub loc_explicit: &'static str,
+    pub loc_env: &'static str,
+    pub loc_project: &'static str,
+    pub loc_library: &'static str,
     // Scenario list columns.
     pub col_status: &'static str,
     pub col_id: &'static str,
@@ -67,22 +72,35 @@ pub struct T {
     pub no_run: &'static str,
     /// `%N` — how many problems the parser reported about the open suite.
     pub diagnostics: &'static str,
+    /// `%S` the file name, `%E` the OS error — the suite could not be read.
+    pub read_error: &'static str,
     /// `%C` scenario, `%S` step.
+    #[allow(dead_code)]
     pub testing_now: &'static str,
     // Dialogs.
+    #[allow(dead_code)]
     pub run_dlg_title: &'static str,
+    #[allow(dead_code)]
     pub run_dlg_env: &'static str,
+    #[allow(dead_code)]
     pub run_dlg_hint: &'static str,
     /// `%C` scenario, `%S` step.
+    #[allow(dead_code)]
     pub note_dlg_title: &'static str,
+    #[allow(dead_code)]
     pub note_dlg_hint: &'static str,
+    #[allow(dead_code)]
     pub copied: &'static str,
+    #[allow(dead_code)]
     pub finish_title: &'static str,
     /// `%I` — the run id.
+    #[allow(dead_code)]
     pub finish_body: &'static str,
     /// Appended to a step's status when the suite was edited after the verdict.
     pub stale_marker: &'static str,
+    #[allow(dead_code)]
     pub dlg_ok: &'static str,
+    #[allow(dead_code)]
     pub dlg_cancel: &'static str,
 }
 
@@ -110,6 +128,10 @@ static PT: T = T {
     about_body: "JAFIZ %V\r\nJá fiz? — execute cenários de teste manuais passo a passo.\r\n\r\ngithub.com/atlas-jedi/foundry32\r\nLicença MIT — Software Imperial",
     lbl_suite: "Suíte:",
     lbl_location: "Local:",
+    loc_explicit: "pasta escolhida",
+    loc_env: "JAFIZ_DIR",
+    loc_project: "projeto",
+    loc_library: "biblioteca",
     col_status: "Status",
     col_id: "Id",
     col_scenario: "Cenário",
@@ -127,6 +149,7 @@ static PT: T = T {
     no_suites: "Nenhuma suíte em %D — crie uma com: jafiz new <nome>",
     no_run: "Nenhuma execução. Use Execução ▸ Nova execução…",
     diagnostics: "⚠ %N problema(s) no arquivo",
+    read_error: "Falha ao ler %S: %E",
     testing_now: "testando agora: %C passo %S",
     run_dlg_title: "Nova execução",
     run_dlg_env: "Ambiente / build:",
@@ -165,6 +188,10 @@ static EN: T = T {
     about_body: "JAFIZ %V\r\nJá fiz? — run manual test scenarios step by step.\r\n\r\ngithub.com/atlas-jedi/foundry32\r\nMIT License — Software Imperial",
     lbl_suite: "Suite:",
     lbl_location: "Location:",
+    loc_explicit: "chosen folder",
+    loc_env: "JAFIZ_DIR",
+    loc_project: "project",
+    loc_library: "library",
     col_status: "Status",
     col_id: "Id",
     col_scenario: "Scenario",
@@ -182,6 +209,7 @@ static EN: T = T {
     no_suites: "No suites in %D — create one with: jafiz new <name>",
     no_run: "No run yet. Use Run ▸ New run…",
     diagnostics: "⚠ %N problem(s) in the file",
+    read_error: "Could not read %S: %E",
     testing_now: "testing now: %C step %S",
     run_dlg_title: "New run",
     run_dlg_env: "Environment / build:",
