@@ -395,3 +395,27 @@ pub fn tally(suite: &Suite, run: Option<&Run>) -> Tally {
 pub fn is_stale(step: &Step, result: &StepResult) -> bool {
     !result.action.is_empty() && result.action != step.action
 }
+
+/// Results that no longer match the suite: the scenario id is gone, or the
+/// scenario exists but has no step with that number.
+///
+/// Reachable in normal use, not just file corruption — the format's rule 3
+/// warns that inserting a scenario without an explicit id shifts every id
+/// below it, and Claude regenerates suites. Both the detail loop and `tally`
+/// walk the suite and look a result up by id, so a stranded result is never
+/// visited by either; without this, a recorded failure could silently
+/// evaporate from every count and every section. Sorted by scenario then
+/// step so the report is stable across runs.
+pub fn orphaned_results<'a>(suite: &Suite, run: &'a Run) -> Vec<&'a StepResult> {
+    let mut orphans: Vec<&StepResult> = run
+        .results
+        .iter()
+        .filter(|result| {
+            suite
+                .scenario(&result.scenario)
+                .is_none_or(|scenario| scenario.step(result.step).is_none())
+        })
+        .collect();
+    orphans.sort_by(|a, b| (a.scenario.as_str(), a.step).cmp(&(b.scenario.as_str(), b.step)));
+    orphans
+}

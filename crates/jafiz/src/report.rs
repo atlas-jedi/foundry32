@@ -12,8 +12,8 @@
 //! back in the language the user chose in the GUI.
 
 use crate::model::{
-    display_symbol, has_skipped_step, is_stale, scenario_done, scenario_status, tally, Run,
-    Scenario, ScenarioStatus, Step, StepResult, StepStatus, Suite,
+    display_symbol, has_skipped_step, is_stale, orphaned_results, scenario_done, scenario_status,
+    tally, Run, Scenario, ScenarioStatus, Step, StepResult, StepStatus, Suite,
 };
 use foundry_common::lang::Lang;
 
@@ -53,6 +53,10 @@ struct T {
     /// exists but cannot be read must never be reported as a suite nobody
     /// ever tested.
     runs_damaged: &'static str,
+    /// Heading for the trailing section listing results whose scenario or
+    /// step no longer exists in the suite — a stranded verdict must still be
+    /// visible, never silently dropped from every count.
+    orphans_heading: &'static str,
 }
 
 static PT: T = T {
@@ -84,6 +88,7 @@ static PT: T = T {
     all_done: "todos os passos com veredito",
     stale: "(o passo mudou no arquivo depois desta marcação)",
     runs_damaged: "histórico de execuções danificado — %E",
+    orphans_heading: "Resultados sem passo correspondente",
 };
 
 static EN: T = T {
@@ -115,6 +120,7 @@ static EN: T = T {
     all_done: "every step has a verdict",
     stale: "(the step changed in the file after this verdict)",
     runs_damaged: "run history is damaged — %E",
+    orphans_heading: "Results with no matching step",
 };
 
 fn t(lang: Lang) -> &'static T {
@@ -278,6 +284,51 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
         out.push_str(&format!("\n## ⬜ {}\n", tr.section_pending));
         out.extend(pending);
     }
+    out.push_str(&orphan_section(suite, run, tr));
+    out
+}
+
+/// The status word alone, with no gating on whether the step is worth
+/// printing — every orphan must be listed, so unlike the detail loop's
+/// verdict match there is no `_ => continue` branch here.
+fn verdict_word(status: StepStatus, tr: &T) -> &'static str {
+    match status {
+        StepStatus::Fail => tr.verdict_fail,
+        StepStatus::Blocked => tr.verdict_blocked,
+        StepStatus::Skip => tr.verdict_skip,
+        StepStatus::Pass => tr.verdict_pass,
+        StepStatus::Pending => tr.verdict_pending,
+    }
+}
+
+/// The trailing section for results whose scenario or step the suite no
+/// longer has — see `model::orphaned_results` for why this is reachable in
+/// normal use. Both the detail loop above and the passed/pending partition
+/// walk the *suite* and look results up, so this is the only place such a
+/// result is ever visited; without it, a recorded failure could vanish from
+/// the report with no trace. An empty string when there is nothing orphaned,
+/// so a suite in good standing gains no new section.
+fn orphan_section(suite: &Suite, run: &Run, tr: &T) -> String {
+    let orphans = orphaned_results(suite, run);
+    if orphans.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\n## ⚠ {}\n", tr.orphans_heading);
+    for result in orphans {
+        let note = if result.note.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", result.note)
+        };
+        out.push_str(&format!(
+            "- {} · {} {} — **{}**{}\n",
+            result.scenario,
+            tr.step_word,
+            result.step,
+            verdict_word(result.status, tr),
+            note
+        ));
+    }
     out
 }
 
@@ -337,6 +388,15 @@ fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
 }
 
 /// The whole suite, every step annotated with its status — `jafiz show`.
+///
+/// Deliberately does not append `orphan_section`: this view's whole promise
+/// is to walk the *suite's* own steps, one line per step, with no tally and
+/// no claim of completeness for anything beyond that — unlike `report`,
+/// which computes counts a reader trusts as the full outcome and where a
+/// dropped orphan would falsify them. A human running `show` to read a
+/// suite's shape is not auditing recorded results; `report` (and `status`,
+/// which quotes its `Progresso:` line) is the one place an orphan silently
+/// vanishing would be a lie, and that is now fixed there.
 pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     let tr = t(lang);
     let mut out = header(suite, run, lang);
