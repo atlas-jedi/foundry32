@@ -35,6 +35,8 @@ impl StepStatus {
         }
     }
 
+    /// The inverse of `code` — parses a status back from its persisted
+    /// `.runs/*.json` value. `None` if it isn't one of the five known codes.
     pub fn from_code(code: &str) -> Option<StepStatus> {
         match code {
             "pending" => Some(StepStatus::Pending),
@@ -66,14 +68,23 @@ impl StepStatus {
 /// A scenario's status, rolled up from its steps' verdicts in the current run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScenarioStatus {
+    /// No run yet, or no step of this scenario has a verdict.
     Pending,
+    /// Some steps are decided and none of them failed or blocked, but at
+    /// least one step is still pending.
     Running,
+    /// Every step is decided, and none failed or blocked.
     Pass,
+    /// At least one step's verdict is `Fail` — outranks every other status,
+    /// even a step that hasn't run yet (see `scenario_status`).
     Fail,
+    /// At least one step's verdict is `Blocked`, and none has failed.
     Blocked,
 }
 
 impl ScenarioStatus {
+    /// The symbol shown next to a scenario in reports and in the GUI's
+    /// scenario list.
     pub fn symbol(&self) -> &'static str {
         match self {
             ScenarioStatus::Pending => "⬜",
@@ -133,10 +144,13 @@ pub struct Suite {
 }
 
 impl Suite {
+    /// The scenario with this id (`SC-01`), if the suite has one.
     pub fn scenario(&self, id: &str) -> Option<&Scenario> {
         self.scenarios.iter().find(|s| s.id == id)
     }
 
+    /// Every step in every scenario, summed — the denominator for a run's
+    /// progress.
     pub fn total_steps(&self) -> usize {
         self.scenarios.iter().map(|s| s.steps.len()).sum()
     }
@@ -172,16 +186,20 @@ pub struct Cursor {
 pub struct Run {
     /// `YYYYMMDD-HHMMSS`, unique within the suite.
     pub id: String,
+    /// When the run began (`YYYY-MM-DD HH:MM:SS`, local time).
     pub started_at: String,
     /// `None` while the run is still open.
     pub finished_at: Option<String>,
     /// Free text describing where this ran (URL, build, browser, test user).
     pub environment: String,
+    /// The step the GUI has open right now, if any.
     pub current: Option<Cursor>,
+    /// Every verdict recorded so far — at most one per step; see `set_result`.
     pub results: Vec<StepResult>,
 }
 
 impl Run {
+    /// The recorded verdict for a step, if one has been logged this run.
     pub fn result(&self, scenario: &str, step: usize) -> Option<&StepResult> {
         self.results.iter().find(|r| r.scenario == scenario && r.step == step)
     }
@@ -204,6 +222,7 @@ impl Run {
         }
     }
 
+    /// True while the run has no `finished_at` yet — still being recorded.
     pub fn is_open(&self) -> bool {
         self.finished_at.is_none()
     }
@@ -220,16 +239,19 @@ pub struct RunFile {
 }
 
 impl RunFile {
+    /// The run the GUI is currently recording into, if any.
     pub fn active(&self) -> Option<&Run> {
         let id = self.active_run.as_deref()?;
         self.runs.iter().find(|r| r.id == id)
     }
 
+    /// Mutable access to the active run, for recording a new verdict into it.
     pub fn active_mut(&mut self) -> Option<&mut Run> {
         let id = self.active_run.clone()?;
         self.runs.iter_mut().find(|r| r.id == id)
     }
 
+    /// The run with this id, from anywhere in the history.
     pub fn run(&self, id: &str) -> Option<&Run> {
         self.runs.iter().find(|r| r.id == id)
     }
