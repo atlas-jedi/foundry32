@@ -113,6 +113,13 @@ pub struct T {
     pub finish_title: &'static str,
     /// `%I` — the run id.
     pub finish_body: &'static str,
+    /// Asked before starting a new run over a run history the loader could not
+    /// read: silently proceeding would replace the damaged-but-maybe-repairable
+    /// file with a history holding only the new run, the exact data loss the
+    /// atomic save was written to prevent, reached through a different door.
+    pub new_run_damaged_title: &'static str,
+    /// `%E` — the same damage reason the status bar already shows.
+    pub new_run_damaged_body: &'static str,
     /// Appended to a step's status when the suite was edited after the verdict.
     pub stale_marker: &'static str,
     pub dlg_ok: &'static str,
@@ -190,6 +197,8 @@ static PT: T = T {
     filter_all: "Todos os arquivos (*.*)",
     finish_title: "Finalizar execução",
     finish_body: "Encerrar a execução %I? Ela deixa de aceitar novas marcações.",
+    new_run_damaged_title: "Histórico de execuções danificado",
+    new_run_damaged_body: "O histórico de execuções desta suíte não pôde ser lido (%E).\r\n\r\nIniciar uma nova execução agora vai SUBSTITUIR o arquivo danificado por um histórico contendo só a execução nova — o que já estava gravado se perde.\r\n\r\nIniciar mesmo assim?",
     stale_marker: "!",
     dlg_ok: "OK",
     dlg_cancel: "Cancelar",
@@ -266,6 +275,8 @@ static EN: T = T {
     filter_all: "All files (*.*)",
     finish_title: "Finish run",
     finish_body: "End run %I? It stops accepting new verdicts.",
+    new_run_damaged_title: "Run history is damaged",
+    new_run_damaged_body: "This suite's run history could not be read (%E).\r\n\r\nStarting a new run now will REPLACE the damaged file with a history holding only the new run — whatever was recorded before is lost.\r\n\r\nStart anyway?",
     stale_marker: "!",
     dlg_ok: "OK",
     dlg_cancel: "Cancel",

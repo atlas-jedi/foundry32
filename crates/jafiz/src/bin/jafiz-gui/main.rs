@@ -789,6 +789,14 @@ impl JafizApp {
     /// Starts a run after asking for the environment. The last run's
     /// environment is offered as the starting point — retesting the same build
     /// is the common case.
+    ///
+    /// Gated on `confirm_new_run_over_damage` before anything else: `state.
+    /// runs_damage` being set means `load_selected_suite` already substituted
+    /// a fresh empty `RunFile` for a history the loader could not read, and
+    /// from here `apply_new_run` → `runs::start_run` → `save_runs()` would
+    /// write straight over the damaged file. The status bar says so, but a
+    /// tester who missed that note must not lose it silently — see C1, the
+    /// same shape of data loss this wave's atomic save was written to close.
     fn new_run(&self) {
         let (lang, environment) = {
             let mut state = self.state.borrow_mut();
@@ -800,7 +808,37 @@ impl JafizApp {
                 state.run_file.latest().map(|run| run.environment.clone()).unwrap_or_default();
             (state.lang, environment)
         };
+        if !self.confirm_new_run_over_damage() {
+            return;
+        }
         self.open_env_dialog(lang, environment, t(lang).run_dlg_title);
+    }
+
+    /// True unless a damaged run history exists and the tester backs out of
+    /// replacing it. No-op (returns `true` immediately) when `runs_damage` is
+    /// unset — the common case must not pay for a modal round trip.
+    ///
+    /// Uses the same synchronous `nwg::modal_message` pattern as `finish_run`'s
+    /// confirmation rather than the async dialog-thread pattern the other
+    /// dialogs use: this is a plain Yes/No with no fields to fill in, so the
+    /// extra machinery (mailbox slot, spawned thread, `DialogGuard`) would
+    /// buy nothing.
+    fn confirm_new_run_over_damage(&self) -> bool {
+        let (tr, reason) = {
+            let state = self.state.borrow();
+            (t(state.lang), state.runs_damage.clone())
+        };
+        let Some(reason) = reason else { return true };
+        let choice = nwg::modal_message(
+            &self.window.handle,
+            &nwg::MessageParams {
+                title: tr.new_run_damaged_title,
+                content: &tr.new_run_damaged_body.replace("%E", &reason),
+                buttons: nwg::MessageButtons::YesNo,
+                icons: nwg::MessageIcons::Warning,
+            },
+        );
+        choice == nwg::MessageChoice::Yes
     }
 
     /// Re-describes the open run's environment. Same window as `new_run`, but
