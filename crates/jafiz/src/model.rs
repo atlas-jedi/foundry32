@@ -312,6 +312,32 @@ pub fn scenario_status(scenario: &Scenario, run: Option<&Run>) -> ScenarioStatus
     }
 }
 
+/// True when any of a scenario's steps was deliberately skipped this run.
+pub fn has_skipped_step(scenario: &Scenario, run: Option<&Run>) -> bool {
+    let Some(run) = run else { return false };
+    scenario
+        .steps
+        .iter()
+        .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
+}
+
+/// The symbol every view shows for a scenario. A scenario whose every step was
+/// skipped rolls up to `Pass` — a skip counts as decided — but nobody tested
+/// it, so it must never wear the passed mark in any view.
+///
+/// The guard is on `Pass` alone, and on any skipped step, because `Pass` is
+/// the only roll-up that claims success: fail, blocked, running and pending
+/// already say something is wrong or unfinished, and overriding them would
+/// hide that. `report`, `show` and the GUI's scenario list all call this, so
+/// one run can no longer read `➖` in one view and `✅` in the next.
+pub fn display_symbol(scenario: &Scenario, run: Option<&Run>) -> &'static str {
+    let status = scenario_status(scenario, run);
+    if status == ScenarioStatus::Pass && has_skipped_step(scenario, run) {
+        return StepStatus::Skip.symbol();
+    }
+    status.symbol()
+}
+
 /// How many of a scenario's steps have a verdict.
 pub fn scenario_done(scenario: &Scenario, run: Option<&Run>) -> usize {
     let Some(run) = run else { return 0 };

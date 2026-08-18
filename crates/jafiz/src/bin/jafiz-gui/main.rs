@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use jafiz::model::{scenario_done, scenario_status, tally, Run, RunFile, StepStatus, Suite};
+use jafiz::model::{display_symbol, scenario_done, tally, Run, RunFile, StepStatus, Suite};
 use jafiz::parser::Diagnostic;
 use jafiz::report;
 use jafiz::runs;
@@ -590,7 +590,7 @@ impl JafizApp {
         let run = viewed_run(&state);
         for scenario in &suite.scenarios {
             let row = [
-                scenario_status(scenario, run).symbol().to_string(),
+                display_symbol(scenario, run).to_string(),
                 scenario.id.clone(),
                 scenario.title.clone(),
                 format!("{}/{}", scenario_done(scenario, run), scenario.steps.len()),

@@ -12,8 +12,8 @@
 //! back in the language the user chose in the GUI.
 
 use crate::model::{
-    is_stale, scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, Step,
-    StepResult, StepStatus, Suite,
+    display_symbol, has_skipped_step, is_stale, scenario_done, scenario_status, tally, Run,
+    Scenario, ScenarioStatus, Step, StepResult, StepStatus, Suite,
 };
 use foundry_common::lang::Lang;
 
@@ -208,7 +208,7 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
         }
         out.push_str(&format!(
             "\n## {} {}\n",
-            detail_symbol(scenario, run),
+            display_symbol(scenario, Some(run)),
             heading(scenario)
         ));
         for step in &scenario.steps {
@@ -308,14 +308,6 @@ fn shows_in_detail(step: &Step, result: &StepResult) -> bool {
     is_annotated(result) || is_stale(step, result)
 }
 
-/// True when any of a scenario's steps was skipped.
-fn has_skip(scenario: &Scenario, run: &Run) -> bool {
-    scenario
-        .steps
-        .iter()
-        .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
-}
-
 /// True when a scenario must be rendered in full rather than summarised: it
 /// failed, it was blocked, a step was skipped, or a step carries a note, a
 /// piece of evidence or a stale verdict. The last cases are why this is not
@@ -336,28 +328,12 @@ fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
     ) {
         return true;
     }
-    if has_skip(scenario, run) {
+    if has_skipped_step(scenario, Some(run)) {
         return true;
     }
     scenario.steps.iter().any(|step| {
         run.result(&scenario.id, step.number).is_some_and(|r| shows_in_detail(step, r))
     })
-}
-
-/// The heading symbol for a detailed scenario: its own status, except that one
-/// with a skipped step is marked skipped rather than passed — a scenario nobody
-/// executed must never be headed with ✅. A scenario detailed only because a
-/// passing step carries a note keeps its own ✅: the note is worth reading, but
-/// nothing about it was skipped.
-fn detail_symbol(scenario: &Scenario, run: &Run) -> &'static str {
-    let status = scenario_status(scenario, Some(run));
-    if matches!(status, ScenarioStatus::Fail | ScenarioStatus::Blocked) {
-        return status.symbol();
-    }
-    if has_skip(scenario, run) {
-        return StepStatus::Skip.symbol();
-    }
-    status.symbol()
 }
 
 /// The whole suite, every step annotated with its status — `jafiz show`.
@@ -367,7 +343,7 @@ pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     for scenario in &suite.scenarios {
         out.push_str(&format!(
             "\n## {} {}\n",
-            scenario_status(scenario, run).symbol(),
+            display_symbol(scenario, run),
             heading(scenario)
         ));
         if !scenario.tags.is_empty() {
