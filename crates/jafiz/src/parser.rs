@@ -80,7 +80,6 @@ pub fn parse(path: &Path, text: &str) -> ParseOutcome {
     };
     let mut diagnostics = Vec::new();
     let mut section = Section::Preamble;
-    let mut description = String::new();
 
     for (index, raw) in text.trim_start_matches('\u{feff}').lines().enumerate() {
         let line_no = index + 1;
@@ -135,7 +134,6 @@ pub fn parse(path: &Path, text: &str) -> ParseOutcome {
                 steps: Vec::new(),
             });
             section = Section::Preamble;
-            description.clear();
             continue;
         }
 
@@ -264,7 +262,13 @@ fn split_heading(heading: &str, position: usize) -> (String, String, bool) {
             break;
         }
     }
-    if seen_dash && digits_after_dash > 0 {
+    // Rule 3 also requires a separator after the id. Without this check
+    // `CT-500ms timeout test` silently splits into id `CT-500` and title
+    // `ms timeout test` — a wrong answer with no diagnostic, which is exactly
+    // what this parser's tolerance is not supposed to mean.
+    let separated =
+        end == heading.len() || heading[end..].starts_with([' ', '·', '-', '—', ':', '\t']);
+    if seen_dash && digits_after_dash > 0 && separated {
         let id = heading[..end].to_string();
         let title = heading[end..]
             .trim_start_matches([' ', '·', '-', '—', ':', '\t'])
@@ -331,11 +335,6 @@ fn append_continuation(step: &mut Step, text: &str) {
                 step.action.push_str(&action);
             }
             step.expected = expected;
-            return;
-        }
-        // A continuation that is only an arrow + result, e.g. "→ o botão habilita".
-        if let Some(rest) = text.strip_prefix('→').or_else(|| text.strip_prefix("->")) {
-            step.expected = rest.trim().to_string();
             return;
         }
         step.action.push(' ');

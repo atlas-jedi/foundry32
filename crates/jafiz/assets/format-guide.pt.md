@@ -12,9 +12,9 @@ execução fica em `.runs/<nome>.json`, ao lado.
    seguido de `·`, `-`, `—`, `:` ou espaço. Sem id explícito, o JAFIZ gera um
    pela posição — e um cenário inserido no meio desloca os ids abaixo dele.
 4. Sob o `## `, antes do primeiro passo: `tags: a, b, c` e
-   `pré: ...` (ou `pre:`, `precondição:`, `precondition:`, `given:`).
+   `pré: ...` (ou `pre:`, `precondição:`, `precondicao:`, `precondition:`, `given:`).
 5. Texto solto antes do primeiro passo vira a descrição do cenário.
-6. Cada item de lista (`1.`, `1)`, `-`, `*`) é um passo. A numeração do arquivo
+6. Cada item de lista (`1.`, `1)`, `-`, `*`, `+`) é um passo. A numeração do arquivo
    é ignorada — os passos são renumerados a partir de 1 em cada cenário.
 7. Dentro do passo, o primeiro `→`, `->` ou `=>` separa a **ação** do
    **resultado esperado**.

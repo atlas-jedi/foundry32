@@ -13,9 +13,9 @@ any editor. JAFIZ never rewrites this file: run progress lives in
    generates one from the position — and a scenario inserted in the middle
    shifts the ids below it.
 4. Under the `## `, before the first step: `tags: a, b, c` and
-   `pré: ...` (or `pre:`, `precondição:`, `precondition:`, `given:`).
+   `pré: ...` (or `pre:`, `precondição:`, `precondicao:`, `precondition:`, `given:`).
 5. Loose text before the first step becomes the scenario's description.
-6. Each list item (`1.`, `1)`, `-`, `*`) is a step. The file's numbering
+6. Each list item (`1.`, `1)`, `-`, `*`, `+`) is a step. The file's numbering
    is ignored — steps are renumbered starting at 1 within each scenario.
 7. Within a step, the first `→`, `->` or `=>` separates the **action** from
    the **expected result**.
