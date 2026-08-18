@@ -24,6 +24,7 @@
 pub mod clock;
 pub mod model;
 pub mod parser;
+pub mod runs;
 pub mod settings;
 pub mod store;
 
