@@ -27,18 +27,30 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 fn main() -> ExitCode {
     enable_utf8_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (dir, rest) = take_dir_flag(&args);
+    let (dir, dir_seen, rest) = take_flag(&args, "--dir");
+    if dir_seen && dir.is_none() {
+        eprintln!("jafiz: --dir precisa de um caminho (ex.: jafiz --dir C:\\projeto\\tests\\manual list)");
+        return ExitCode::from(2);
+    }
+    let (run_id, run_seen, rest) = take_flag(&rest, "--run");
+    if run_seen && run_id.is_none() {
+        eprintln!("jafiz: --run precisa de um id de execução (veja jafiz list)");
+        return ExitCode::from(2);
+    }
+    let dir = dir.map(PathBuf::from);
     let settings = AppSettings::load();
     let lang = settings.lang;
 
     match rest.first().map(String::as_str) {
         Some("list") => cmd_list(dir.as_deref(), lang),
-        Some("show") => cmd_show(dir.as_deref(), rest.get(1).map(String::as_str), lang),
+        Some("show") => return cmd_show(dir.as_deref(), rest.get(1).map(String::as_str), lang),
         Some("status") => cmd_status(dir.as_deref(), lang),
-        Some("report") => cmd_report(dir.as_deref(), rest.get(1).map(String::as_str), &rest, lang),
+        Some("report") => {
+            return cmd_report(dir.as_deref(), rest.get(1).map(String::as_str), run_id.as_deref(), lang)
+        }
         Some("check") => return cmd_check(rest.get(1).map(String::as_str)),
         Some("format") => cmd_format(lang),
-        Some("new") => cmd_new(dir.as_deref(), rest.get(1).map(String::as_str)),
+        Some("new") => return cmd_new(dir.as_deref(), rest.get(1).map(String::as_str)),
         Some("--dump") => cmd_dump(dir.as_deref(), rest.get(1).map(String::as_str), lang),
         Some("--help") | Some("-h") => print_help(),
         None => launch_gui(),
@@ -58,20 +70,24 @@ fn enable_utf8_console() {
     unsafe { winapi::um::wincon::SetConsoleOutputCP(65001) };
 }
 
-/// Pulls `--dir <path>` out of the argument list wherever it appears, so it
-/// can precede or follow the command.
-fn take_dir_flag(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
-    let mut dir = None;
+/// Pulls a `--flag <value>` pair out of the argument list wherever it appears,
+/// so a flag can precede or follow the command. Reports whether the flag was
+/// seen at all, separately from whether it had a value — a flag written with
+/// no value is a mistake worth naming, not something to swallow.
+fn take_flag(args: &[String], flag: &str) -> (Option<String>, bool, Vec<String>) {
+    let mut value = None;
+    let mut seen = false;
     let mut rest = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == "--dir" {
-            dir = iter.next().map(PathBuf::from);
+        if arg == flag {
+            seen = true;
+            value = iter.next().cloned();
         } else {
             rest.push(arg.clone());
         }
     }
-    (dir, rest)
+    (value, seen, rest)
 }
 
 /// Loads a suite by name, or the only one present when no name is given.
@@ -79,7 +95,25 @@ fn take_dir_flag(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
 fn open_suite(dir: Option<&Path>, name: Option<&str>) -> Option<(PathBuf, Suite, RunFile)> {
     let location = store::resolve_location(dir);
     let path = match name {
-        Some(name) => store::find_suite(&location.dir, name),
+        Some(name) => {
+            let matches = store::match_suites(&location.dir, name);
+            if matches.len() > 1 {
+                eprintln!("jafiz: '{name}' casa com {} suítes:", matches.len());
+                for path in &matches {
+                    eprintln!("  {}", path.file_stem().unwrap_or_default().to_string_lossy());
+                }
+                eprintln!("informe o nome completo.");
+                return None;
+            }
+            if matches.is_empty() {
+                eprintln!(
+                    "jafiz: nenhuma suíte chamada '{name}' em {} (veja jafiz list)",
+                    location.dir.display()
+                );
+                return None;
+            }
+            matches.into_iter().next()
+        }
         None => {
             let suites = store::list_suites(&location.dir);
             match suites.len() {
@@ -126,9 +160,10 @@ fn cmd_list(dir: Option<&Path>, lang: Lang) {
     }
 }
 
-fn cmd_show(dir: Option<&Path>, name: Option<&str>, lang: Lang) {
-    let Some((_, suite, runs)) = open_suite(dir, name) else { return };
+fn cmd_show(dir: Option<&Path>, name: Option<&str>, lang: Lang) -> ExitCode {
+    let Some((_, suite, runs)) = open_suite(dir, name) else { return ExitCode::from(2) };
     print!("{}", report::show(&suite, runs.latest(), lang));
+    ExitCode::SUCCESS
 }
 
 fn cmd_status(dir: Option<&Path>, lang: Lang) {
@@ -147,19 +182,34 @@ fn cmd_status(dir: Option<&Path>, lang: Lang) {
     }
 }
 
-fn cmd_report(dir: Option<&Path>, name: Option<&str>, args: &[String], lang: Lang) {
-    // `--run <id>` is optional; without it the active or most recent run wins.
-    let wanted = args.iter().position(|a| a == "--run").and_then(|i| args.get(i + 1));
-    let name = name.filter(|n| !n.starts_with("--"));
-    let Some((_, suite, runs)) = open_suite(dir, name) else { return };
-    let run: Option<&Run> = match wanted {
-        Some(id) => runs.run(id),
+fn cmd_report(dir: Option<&Path>, name: Option<&str>, run_id: Option<&str>, lang: Lang) -> ExitCode {
+    let Some((_, suite, runs)) = open_suite(dir, name) else { return ExitCode::from(2) };
+    let run: Option<&Run> = match run_id {
+        Some(id) => match runs.run(id) {
+            Some(run) => Some(run),
+            None => {
+                // Rendering "nenhuma execução registrada" for a typo'd id would
+                // assert something false about the user's testing — and this is
+                // the command Claude reads to decide what to fix.
+                eprintln!("jafiz: a suíte '{}' não tem execução com id '{id}'", suite.stem);
+                if runs.runs.is_empty() {
+                    eprintln!("  (nenhuma execução registrada)");
+                } else {
+                    let ids: Vec<&str> = runs.runs.iter().map(|r| r.id.as_str()).collect();
+                    eprintln!("  execuções: {}", ids.join(", "));
+                }
+                return ExitCode::from(2);
+            }
+        },
         None => runs.latest(),
     };
     print!("{}", report::report(&suite, run, lang));
+    ExitCode::SUCCESS
 }
 
-/// Validates a suite file. Exit code 1 on error so a caller can gate on it.
+/// Validates a suite file. Exit 1 means it parsed but has diagnostic errors;
+/// exit 2 covers bad usage and a file that could not be read at all — a
+/// caller gating on "did the suite pass" can treat anything nonzero as no.
 fn cmd_check(path: Option<&str>) -> ExitCode {
     let Some(path) = path else {
         eprintln!("uso: jafiz check <arquivo.md>");
@@ -191,21 +241,32 @@ fn cmd_format(lang: Lang) {
     print!("{}", if matches!(lang, Lang::En) { GUIDE_EN } else { GUIDE_PT });
 }
 
-fn cmd_new(dir: Option<&Path>, name: Option<&str>) {
+fn cmd_new(dir: Option<&Path>, name: Option<&str>) -> ExitCode {
     let Some(name) = name else {
         eprintln!("uso: jafiz new <nome>");
-        return;
+        return ExitCode::from(2);
     };
     let location = store::resolve_location(dir);
     if let Err(e) = std::fs::create_dir_all(&location.dir) {
         eprintln!("jafiz: falha ao criar {}: {e}", location.dir.display());
-        return;
+        return ExitCode::from(2);
     }
-    let stem = name.trim().trim_end_matches(".md");
+    let stem = name.trim().trim_end_matches(".md").trim();
+    // `new` is the CLI's only mutating command, and this is its only argument
+    // that becomes a path — a separator or `..` would place the file outside
+    // the resolved location entirely.
+    if stem.is_empty() {
+        eprintln!("jafiz: o nome da suíte não pode ser vazio");
+        return ExitCode::from(2);
+    }
+    if stem.contains(['/', '\\', ':']) || stem.contains("..") {
+        eprintln!("jafiz: o nome da suíte não pode conter caminho ('{stem}')");
+        return ExitCode::from(2);
+    }
     let path = location.dir.join(format!("{stem}.md"));
     if path.exists() {
         eprintln!("jafiz: {} já existe", path.display());
-        return;
+        return ExitCode::from(2);
     }
     // The example doubles as the skeleton: a new suite starts as a valid one.
     let body = EXAMPLE.replacen(
@@ -214,8 +275,14 @@ fn cmd_new(dir: Option<&Path>, name: Option<&str>) {
         1,
     );
     match std::fs::write(&path, body) {
-        Ok(()) => println!("jafiz: criado {}", path.display()),
-        Err(e) => eprintln!("jafiz: falha ao gravar {}: {e}", path.display()),
+        Ok(()) => {
+            println!("jafiz: criado {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("jafiz: falha ao gravar {}: {e}", path.display());
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -231,7 +298,8 @@ fn cmd_dump(dir: Option<&Path>, out: Option<&str>, lang: Lang) {
                 let runs = store::load_runs(&location.dir, &outcome.suite.stem);
                 text.push_str(&format!("\n=== {} ===\n", path.display()));
                 for d in &outcome.diagnostics {
-                    text.push_str(&format!("{}: {}\n", d.severity.label(), d.message));
+                    let where_at = if d.line > 0 { format!("linha {}", d.line) } else { "arquivo".into() };
+                    text.push_str(&format!("{}: {where_at}: {}\n", d.severity.label(), d.message));
                 }
                 text.push_str(&report::show(&outcome.suite, runs.latest(), lang));
             }

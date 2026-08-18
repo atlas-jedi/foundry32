@@ -120,19 +120,35 @@ pub fn list_suites(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Finds a suite by file stem, case-insensitively; falls back to a substring
-/// match on the stem so `jafiz report check` finds `checkout.md`.
-pub fn find_suite(dir: &Path, name: &str) -> Option<PathBuf> {
+/// Every suite whose file stem matches `name`, case-insensitively. An exact
+/// stem match wins outright and returns only itself; otherwise every substring
+/// match comes back, so a caller can refuse an ambiguous name instead of
+/// silently picking one. An empty query matches nothing — `contains("")` is
+/// true for every string, which would otherwise return the whole directory.
+pub fn match_suites(dir: &Path, name: &str) -> Vec<PathBuf> {
     let wanted = name.trim().trim_end_matches(".md").to_lowercase();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
     let suites = list_suites(dir);
-    let stem_of = |p: &PathBuf| {
-        p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default()
+    let stem_of = |path: &Path| {
+        path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default()
     };
-    suites
-        .iter()
-        .find(|p| stem_of(p) == wanted)
-        .or_else(|| suites.iter().find(|p| stem_of(p).contains(&wanted)))
-        .cloned()
+    if let Some(exact) = suites.iter().find(|path| stem_of(path) == wanted) {
+        return vec![exact.clone()];
+    }
+    suites.into_iter().filter(|path| stem_of(path).contains(&wanted)).collect()
+}
+
+/// The single suite `name` resolves to, or `None` when it matches none or
+/// several. Callers that want to explain an ambiguity use `match_suites`.
+pub fn find_suite(dir: &Path, name: &str) -> Option<PathBuf> {
+    let mut matches = match_suites(dir, name);
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
 }
 
 /// Reads and parses a suite from disk — the store's side of the module split
