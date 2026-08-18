@@ -8,6 +8,7 @@ use foundry_common::lang::{detect_system_lang, Lang};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+/// One user's preferences, as read from or written to `settings.json`.
 pub struct AppSettings {
     pub lang: Lang,
     /// Suite folders the user added in the GUI, most recent first.
@@ -28,6 +29,9 @@ fn settings_file() -> PathBuf {
 }
 
 impl AppSettings {
+    /// Reads preferences from disk, falling back to the detected system
+    /// language and empty history when the file is missing or unreadable —
+    /// a fresh install must still produce a usable `AppSettings`.
     pub fn load() -> AppSettings {
         let value = std::fs::read_to_string(settings_file())
             .ok()
@@ -44,6 +48,7 @@ impl AppSettings {
         }
     }
 
+    /// Writes preferences to disk, creating the settings folder on first use.
     pub fn save(&self) -> Result<(), String> {
         let dir = settings_dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;

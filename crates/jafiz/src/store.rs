@@ -17,6 +17,7 @@ const PROJECT_DIRS: [&str; 2] = ["tests/manual", ".jafiz"];
 /// How far up the tree the project search walks before giving up.
 const MAX_ASCENT: usize = 12;
 
+/// Which rung of the cascade (spec §3) a location was resolved from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocationKind {
     /// `--dir` on the CLI, or the folder chosen in the GUI.
@@ -30,6 +31,9 @@ pub enum LocationKind {
 }
 
 impl LocationKind {
+    /// Short label for where a location came from, so a status line or the
+    /// GUI's location picker can tell an explicit `--dir` apart from a folder
+    /// found by the project search or from the shared library.
     pub fn label(&self) -> &'static str {
         match self {
             LocationKind::Explicit => "--dir",
@@ -40,6 +44,9 @@ impl LocationKind {
     }
 }
 
+/// A resolved suite folder, together with which rung of the cascade produced
+/// it — so callers and error messages can say where a suite came from, not
+/// just where it is.
 #[derive(Clone, Debug)]
 pub struct Location {
     pub dir: PathBuf,
@@ -128,6 +135,9 @@ pub fn find_suite(dir: &Path, name: &str) -> Option<PathBuf> {
         .cloned()
 }
 
+/// Reads and parses a suite from disk — the store's side of the module split
+/// documented in `lib.rs`: every filesystem touch goes through `store`, even
+/// one that immediately hands off to `parser`.
 pub fn load_suite(path: &Path) -> std::io::Result<ParseOutcome> {
     parse_file(path)
 }
@@ -152,6 +162,8 @@ pub fn load_runs(dir: &Path, stem: &str) -> RunFile {
     }
 }
 
+/// Writes a suite's run history as pretty-printed JSON — readable when
+/// someone opens it directly, and diffable once it lands in git.
 pub fn save_runs(dir: &Path, file: &RunFile) -> Result<(), String> {
     let path = runs_path(dir, &file.suite);
     if let Some(parent) = path.parent() {
