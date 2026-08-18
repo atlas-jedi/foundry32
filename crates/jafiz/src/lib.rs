@@ -24,5 +24,7 @@
 pub mod clock;
 pub mod model;
 pub mod parser;
+pub mod settings;
+pub mod store;
 
 pub use model::{Run, RunFile, Scenario, Step, StepResult, StepStatus, Suite};
