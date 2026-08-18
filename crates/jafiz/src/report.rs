@@ -12,8 +12,8 @@
 //! back in the language the user chose in the GUI.
 
 use crate::model::{
-    scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, StepResult, StepStatus,
-    Suite,
+    is_stale, scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, Step,
+    StepResult, StepStatus, Suite,
 };
 use foundry_common::lang::Lang;
 
@@ -211,11 +211,11 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 StepStatus::Fail => tr.verdict_fail,
                 StepStatus::Blocked => tr.verdict_blocked,
                 StepStatus::Skip => tr.verdict_skip,
-                // A step the tester wrote on is rendered whatever its verdict,
-                // with its own status word — never dropped, and never dressed
-                // up as a failure it was not.
-                StepStatus::Pass if is_annotated(result) => tr.verdict_pass,
-                StepStatus::Pending if is_annotated(result) => tr.verdict_pending,
+                // A step the tester wrote on — or one the file changed under —
+                // is rendered whatever its verdict, with its own status word:
+                // never dropped, and never dressed up as a failure it was not.
+                StepStatus::Pass if shows_in_detail(step, result) => tr.verdict_pass,
+                StepStatus::Pending if shows_in_detail(step, result) => tr.verdict_pending,
                 _ => continue,
             };
             out.push_str(&format!(
@@ -230,7 +230,7 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 format!(": {}", result.note)
             };
             out.push_str(&format!("  **{verdict}**{note}\n"));
-            if crate::model::is_stale(step, result) {
+            if is_stale(step, result) {
                 out.push_str(&format!("  {}\n", tr.stale));
             }
             for path in &result.evidence {
@@ -287,6 +287,21 @@ fn is_annotated(result: &StepResult) -> bool {
     !result.note.is_empty() || !result.evidence.is_empty()
 }
 
+/// True when a step's own result has to be printed even though its verdict
+/// alone would collapse into the one-line "passed" list.
+///
+/// Two sibling reasons, and both are things only the result knows: the tester
+/// wrote something on it, or the suite was edited after it was marked. Spec §5
+/// requires the second to be flagged **stale** rather than silently
+/// re-attributed, and a report that never mentions it is exactly the silent
+/// re-attribution — `jafiz show` and the GUI both say so, so this must too.
+///
+/// `needs_detail` and the detail loop share this predicate so a scenario is
+/// never pulled into the detailed section by a step the loop then drops.
+fn shows_in_detail(step: &Step, result: &StepResult) -> bool {
+    is_annotated(result) || is_stale(step, result)
+}
+
 /// True when any of a scenario's steps was skipped.
 fn has_skip(scenario: &Scenario, run: &Run) -> bool {
     scenario
@@ -296,12 +311,14 @@ fn has_skip(scenario: &Scenario, run: &Run) -> bool {
 }
 
 /// True when a scenario must be rendered in full rather than summarised: it
-/// failed, it was blocked, a step was skipped, or a step carries a note or
-/// evidence. The last two cases are why this is not just a status check —
-/// `scenario_status` counts a skip as decided, so an all-skipped scenario rolls
-/// up to `Pass`, and a passing step's note has no effect on the roll-up at all;
-/// either would otherwise collapse into the one-line "passed" list, taking the
-/// tester's own words with it.
+/// failed, it was blocked, a step was skipped, or a step carries a note, a
+/// piece of evidence or a stale verdict. The last cases are why this is not
+/// just a status check — `scenario_status` counts a skip as decided, so an
+/// all-skipped scenario rolls up to `Pass`, and neither a passing step's note
+/// nor a step the file changed under has any effect on the roll-up at all; any
+/// of them would otherwise collapse into the one-line "passed" list, taking
+/// the tester's own words — or the warning that they no longer apply — with
+/// it.
 ///
 /// This is the sole partition rule: the summary loop skips exactly the
 /// scenarios this returns true for, so every scenario appears in exactly one
@@ -316,10 +333,9 @@ fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
     if has_skip(scenario, run) {
         return true;
     }
-    scenario
-        .steps
-        .iter()
-        .any(|step| run.result(&scenario.id, step.number).is_some_and(is_annotated))
+    scenario.steps.iter().any(|step| {
+        run.result(&scenario.id, step.number).is_some_and(|r| shows_in_detail(step, r))
+    })
 }
 
 /// The heading symbol for a detailed scenario: its own status, except that one
@@ -367,7 +383,7 @@ pub fn show(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 // `show` is the view built to annotate every step, so it is
                 // exactly where a verdict recorded against wording the file no
                 // longer carries has to surface.
-                if crate::model::is_stale(step, result) {
+                if is_stale(step, result) {
                     out.push_str(&format!("   {}\n", tr.stale));
                 }
                 if !result.note.is_empty() {
