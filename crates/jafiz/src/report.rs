@@ -12,7 +12,8 @@
 //! back in the language the user chose in the GUI.
 
 use crate::model::{
-    scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, StepStatus, Suite,
+    scenario_done, scenario_status, tally, Run, Scenario, ScenarioStatus, StepResult, StepStatus,
+    Suite,
 };
 use foundry_common::lang::Lang;
 
@@ -32,6 +33,12 @@ struct T {
     verdict_fail: &'static str,
     verdict_blocked: &'static str,
     verdict_skip: &'static str,
+    /// A step that passed but carries a note or evidence — the verdict word
+    /// that keeps the tester's own words attached to what actually happened.
+    verdict_pass: &'static str,
+    /// A step annotated before any verdict was recorded (`runs::set_note`
+    /// deliberately allows that: something looks off mid-step).
+    verdict_pending: &'static str,
     evidence: &'static str,
     label_tags: &'static str,
     label_pre: &'static str,
@@ -60,6 +67,8 @@ static PT: T = T {
     verdict_fail: "FALHOU",
     verdict_blocked: "BLOQUEADO",
     verdict_skip: "PULADO",
+    verdict_pass: "PASSOU",
+    verdict_pending: "PENDENTE",
     evidence: "evidência",
     label_tags: "tags:",
     label_pre: "pré:",
@@ -88,6 +97,8 @@ static EN: T = T {
     verdict_fail: "FAILED",
     verdict_blocked: "BLOCKED",
     verdict_skip: "SKIPPED",
+    verdict_pass: "PASSED",
+    verdict_pending: "PENDING",
     evidence: "evidence",
     label_tags: "tags:",
     label_pre: "pre:",
@@ -183,7 +194,8 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     // Anything needing attention comes first, in suite order, with the
     // offending step verbatim. Skipped steps qualify: `scenario_status` rolls
     // an all-skipped scenario up to `Pass`, and a scenario nobody executed
-    // reading as verified is the one lie this report must never tell.
+    // reading as verified is the one lie this report must never tell. So does
+    // an annotated step — see `is_annotated`.
     for scenario in &suite.scenarios {
         if !needs_detail(scenario, run) {
             continue;
@@ -199,6 +211,11 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
                 StepStatus::Fail => tr.verdict_fail,
                 StepStatus::Blocked => tr.verdict_blocked,
                 StepStatus::Skip => tr.verdict_skip,
+                // A step the tester wrote on is rendered whatever its verdict,
+                // with its own status word — never dropped, and never dressed
+                // up as a failure it was not.
+                StepStatus::Pass if is_annotated(result) => tr.verdict_pass,
+                StepStatus::Pending if is_annotated(result) => tr.verdict_pending,
                 _ => continue,
             };
             out.push_str(&format!(
@@ -258,11 +275,37 @@ pub fn report(suite: &Suite, run: Option<&Run>, lang: Lang) -> String {
     out
 }
 
+/// True when the tester deliberately recorded something against a step: a note
+/// or an evidence path.
+///
+/// Such a step has to reach the report whatever its verdict. "passou, mas
+/// demorou 8s" is exactly what this tool exists to carry back, and so is a
+/// screenshot of a step that worked; a note written before any verdict counts
+/// too, which is why `runs::set_note` creates a bare `Pending` result. Rolling
+/// the scenario up to a one-line ✅ would silently throw all three away.
+fn is_annotated(result: &StepResult) -> bool {
+    !result.note.is_empty() || !result.evidence.is_empty()
+}
+
+/// True when any of a scenario's steps was skipped.
+fn has_skip(scenario: &Scenario, run: &Run) -> bool {
+    scenario
+        .steps
+        .iter()
+        .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
+}
+
 /// True when a scenario must be rendered in full rather than summarised: it
-/// failed, it was blocked, or a step was skipped. The skip case is why this
-/// is not just a status check — `scenario_status` counts a skip as decided,
-/// so an all-skipped scenario rolls up to `Pass` and would otherwise collapse
-/// into the one-line "passed" list, taking the tester's note with it.
+/// failed, it was blocked, a step was skipped, or a step carries a note or
+/// evidence. The last two cases are why this is not just a status check —
+/// `scenario_status` counts a skip as decided, so an all-skipped scenario rolls
+/// up to `Pass`, and a passing step's note has no effect on the roll-up at all;
+/// either would otherwise collapse into the one-line "passed" list, taking the
+/// tester's own words with it.
+///
+/// This is the sole partition rule: the summary loop skips exactly the
+/// scenarios this returns true for, so every scenario appears in exactly one
+/// section.
 fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
     if matches!(
         scenario_status(scenario, Some(run)),
@@ -270,20 +313,29 @@ fn needs_detail(scenario: &Scenario, run: &Run) -> bool {
     ) {
         return true;
     }
+    if has_skip(scenario, run) {
+        return true;
+    }
     scenario
         .steps
         .iter()
-        .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
+        .any(|step| run.result(&scenario.id, step.number).is_some_and(is_annotated))
 }
 
 /// The heading symbol for a detailed scenario: its own status, except that one
-/// detailed only because steps were skipped is marked skipped, never passed.
+/// with a skipped step is marked skipped rather than passed — a scenario nobody
+/// executed must never be headed with ✅. A scenario detailed only because a
+/// passing step carries a note keeps its own ✅: the note is worth reading, but
+/// nothing about it was skipped.
 fn detail_symbol(scenario: &Scenario, run: &Run) -> &'static str {
     let status = scenario_status(scenario, Some(run));
-    match status {
-        ScenarioStatus::Fail | ScenarioStatus::Blocked => status.symbol(),
-        _ => StepStatus::Skip.symbol(),
+    if matches!(status, ScenarioStatus::Fail | ScenarioStatus::Blocked) {
+        return status.symbol();
     }
+    if has_skip(scenario, run) {
+        return StepStatus::Skip.symbol();
+    }
+    status.symbol()
 }
 
 /// The whole suite, every step annotated with its status — `jafiz show`.
