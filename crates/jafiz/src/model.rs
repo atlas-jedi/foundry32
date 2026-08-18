@@ -321,18 +321,37 @@ pub fn has_skipped_step(scenario: &Scenario, run: Option<&Run>) -> bool {
         .any(|step| run.status_of(&scenario.id, step.number) == StepStatus::Skip)
 }
 
+/// True when a scenario has at least one step and every one of them was
+/// skipped this run. A step-less scenario is not "all skipped" — it is empty.
+///
+/// Shared by `tally` (to count the scenario apart from a genuine pass) and
+/// `display_symbol` (to pick its glyph), so the header's count and the
+/// heading's symbol can never disagree about the same scenario. A scenario
+/// with *some* skipped steps still rolls up to a real `Pass` — an unrelated
+/// skip elsewhere in the scenario must not overrule the steps that were
+/// actually tested.
+fn all_steps_skipped(scenario: &Scenario, run: Option<&Run>) -> bool {
+    !scenario.steps.is_empty()
+        && scenario.steps.iter().all(|step| {
+            run.is_some_and(|r| r.status_of(&scenario.id, step.number) == StepStatus::Skip)
+        })
+}
+
 /// The symbol every view shows for a scenario. A scenario whose every step was
 /// skipped rolls up to `Pass` — a skip counts as decided — but nobody tested
 /// it, so it must never wear the passed mark in any view.
 ///
-/// The guard is on `Pass` alone, and on any skipped step, because `Pass` is
+/// The guard is on `Pass` alone, and on `all_steps_skipped`, because `Pass` is
 /// the only roll-up that claims success: fail, blocked, running and pending
 /// already say something is wrong or unfinished, and overriding them would
-/// hide that. `report`, `show` and the GUI's scenario list all call this, so
-/// one run can no longer read `➖` in one view and `✅` in the next.
+/// hide that. It is deliberately narrower than "any step skipped" — a
+/// scenario with three passes and one skip is still a pass, and must read
+/// that way everywhere. `report`, `show` and the GUI's scenario list all call
+/// this, so one run can no longer read `➖` in one view and `✅` in the next,
+/// nor contradict the header's own count of the same scenario.
 pub fn display_symbol(scenario: &Scenario, run: Option<&Run>) -> &'static str {
     let status = scenario_status(scenario, run);
-    if status == ScenarioStatus::Pass && has_skipped_step(scenario, run) {
+    if status == ScenarioStatus::Pass && all_steps_skipped(scenario, run) {
         return StepStatus::Skip.symbol();
     }
     status.symbol()
@@ -368,15 +387,10 @@ pub fn tally(suite: &Suite, run: Option<&Run>) -> Tally {
         match scenario_status(scenario, run) {
             // An all-skipped scenario also rolls up to `Pass`, but counting it
             // as OK would overstate the run in the one line a reader trusts
-            // most. A step-less scenario is not "all skipped" — it is empty.
+            // most. Shares `all_steps_skipped` with `display_symbol` so this
+            // count and that scenario's heading symbol never disagree.
             ScenarioStatus::Pass => {
-                let all_skipped = !scenario.steps.is_empty()
-                    && scenario.steps.iter().all(|step| {
-                        run.is_some_and(|r| {
-                            r.status_of(&scenario.id, step.number) == StepStatus::Skip
-                        })
-                    });
-                if all_skipped {
+                if all_steps_skipped(scenario, run) {
                     t.scenarios_skipped += 1;
                 } else {
                     t.scenarios_pass += 1;
