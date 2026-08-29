@@ -112,11 +112,17 @@ fn run_dump_path(out_path: &str) {
         Err(error) => format!("error {error}\n"),
         Ok(None) => "value: <absent>\n".to_string(),
         Ok(Some(value)) => {
+            // `as_chunks`, not `chunks_exact(2)`: the pair arrives as a
+            // `[u8; 2]` the conversion takes whole, with no indexing. A
+            // trailing odd byte is not UTF-16 either way, and both drop it.
             let text = String::from_utf16_lossy(
                 &value
                     .bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(u16::from_le_bytes)
                     .take_while(|unit| *unit != 0)
                     .collect::<Vec<u16>>(),
             );

@@ -76,7 +76,7 @@ fn run_dialog(params: HistoryParams) {
         .position((320, 200))
         // Born hidden, shown once the controls exist — see `run_dialog`.
         .flags(nwg::WindowFlags::WINDOW)
-        .title(tr.menu_run_history.trim_end_matches('…'))
+        .title(tr.btn_history.trim_end_matches('…'))
         .build(&mut window)
         .expect("history dialog window");
 
