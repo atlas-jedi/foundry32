@@ -152,10 +152,12 @@ fn read_unicode_string(bridge: &Wow64Bridge, handle: HANDLE, addr: u64) -> Optio
     }
     let mut bytes = vec![0u8; length];
     read_mem(bridge, handle, buffer, &mut bytes)?;
-    let utf16: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
+    // `as_chunks`, not `chunks_exact(2)`: the pair arrives as a `[u8; 2]` the
+    // conversion takes whole, with no indexing and no length to get wrong. A
+    // trailing odd byte cannot happen — `length` counts UTF-16 units — and the
+    // remainder half of the pair is dropped for exactly that reason.
+    let utf16: Vec<u16> =
+        bytes.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes).collect();
     let text = String::from_utf16_lossy(&utf16);
     let trimmed = text.trim_end_matches('\0').trim();
     if trimmed.is_empty() {
