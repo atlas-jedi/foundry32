@@ -16,7 +16,7 @@ use foundry_common::ui::{
     apply_window_icon, insert_report_list_view_column, set_menu_item_text, set_submenu_text,
 };
 use native_windows_gui as nwg;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -39,16 +39,42 @@ pub(crate) const ST_NOTE: usize = 4;
 
 const MARGIN: i32 = 8;
 const HEADER_H: i32 = 26;
+const ROW_GAP: i32 = 6;
+const TOOLBAR_H: i32 = 26;
 const BUTTON_W: i32 = 116;
 const BUTTON_H: i32 = 26;
 const BUTTON_GAP: i32 = 6;
 const STATUS_H: i32 = 24;
-const SCENARIOS_W: i32 = 330;
+
+// Run toolbar. Fixed widths, sized to the longest caption either language puts
+// on them; only the environment picker stretches with the window.
+const RUN_NEW_W: i32 = 140;
+const RUN_FINISH_W: i32 = 110;
+const ENV_LABEL_W: i32 = 84;
+const HISTORY_W: i32 = 110;
+
+/// The draggable gap between the two lists — the same 8px the fixed layout
+/// used to leave there, so nothing looks different until someone grabs it.
+pub(crate) const SPLITTER_W: i32 = 8;
+
+/// Where the divider sits until the tester moves it.
+pub(crate) const SCENARIOS_W_DEFAULT: i32 = 330;
+
+// How far the divider can travel. Past either end one of the two lists stops
+// being readable, which is the very problem the divider exists to fix.
+const SCENARIOS_W_MIN: i32 = 140;
+const STEPS_W_MIN: i32 = 220;
+
+// Below this there is no room left to lay anything out: `layout` bails, and the
+// divider reports no rectangle, so nothing can be dragged either.
+const MIN_W: i32 = 560;
+const MIN_H: i32 = 360;
 
 /// Builds every control the window owns and hands back the assembled app.
 pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
     let lang = settings.lang;
     let tr = t(lang);
+    let scenarios_w = settings.scenarios_width.unwrap_or(SCENARIOS_W_DEFAULT);
 
     let mut window = nwg::Window::default();
     nwg::Window::builder()
@@ -61,6 +87,11 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
 
     // Menu bar. `nwg::Menu` is a top-level submenu, `nwg::MenuItem` a command;
     // both are addressed by handle in the event handler.
+    //
+    // There is deliberately no "Execução" menu: everything a run needs — start,
+    // finish, environment, history — sits on the toolbar under the header,
+    // where each control being enabled or greyed out says whether a run is open
+    // at all. The same four commands behind a menu read as available always.
     let submenu = |text: &str, window: &nwg::Window| {
         let mut menu = nwg::Menu::default();
         nwg::Menu::builder().parent(window).text(text).build(&mut menu).expect("menu");
@@ -75,11 +106,6 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
     let menu_open = item(tr.menu_open, &menu_file);
     let menu_reload = item(tr.menu_reload, &menu_file);
     let menu_exit = item(tr.menu_exit, &menu_file);
-    let menu_run = submenu(tr.menu_run, &window);
-    let menu_run_new = item(tr.menu_run_new, &menu_run);
-    let menu_run_env = item(tr.menu_run_env, &menu_run);
-    let menu_run_finish = item(tr.menu_run_finish, &menu_run);
-    let menu_run_history = item(tr.menu_run_history, &menu_run);
     let menu_report = submenu(tr.menu_report, &window);
     let menu_report_copy = item(tr.menu_report_copy, &menu_report);
     let menu_report_save = item(tr.menu_report_save, &menu_report);
@@ -96,6 +122,23 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
     nwg::ComboBox::builder().parent(&window).collection(Vec::new()).build(&mut suite_combo).expect("suite_combo");
     let mut location_label = nwg::Label::default();
     nwg::Label::builder().parent(&window).text("").build(&mut location_label).expect("location_label");
+
+    let button = |text: &str, parent: &nwg::Window| {
+        let mut control = nwg::Button::default();
+        nwg::Button::builder().parent(parent).text(text).build(&mut control).expect("button");
+        apply_classic_button_theme(&control);
+        control
+    };
+
+    // Run toolbar, second row: start a run, finish it, say where it is being
+    // run, and reach the ones already recorded.
+    let btn_run_new = button(tr.btn_run_new, &window);
+    let btn_run_finish = button(tr.btn_run_finish, &window);
+    let mut env_label = nwg::Label::default();
+    nwg::Label::builder().parent(&window).text(tr.lbl_env).build(&mut env_label).expect("env_label");
+    let mut env_combo: nwg::ComboBox<String> = nwg::ComboBox::default();
+    nwg::ComboBox::builder().parent(&window).collection(Vec::new()).build(&mut env_combo).expect("env_combo");
+    let btn_history = button(tr.btn_history, &window);
 
     // The two report-style lists.
     let list = |parent: &nwg::Window| {
@@ -122,12 +165,6 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
 
     // Verdict buttons, under the step list — where the tester's eyes already
     // are while reading the step they just executed.
-    let button = |text: &str, parent: &nwg::Window| {
-        let mut control = nwg::Button::default();
-        nwg::Button::builder().parent(parent).text(text).build(&mut control).expect("button");
-        apply_classic_button_theme(&control);
-        control
-    };
     let btn_pass = button(tr.btn_pass, &window);
     let btn_fail = button(tr.btn_fail, &window);
     let btn_blocked = button(tr.btn_blocked, &window);
@@ -144,16 +181,26 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
     // Title bar, taskbar and Alt+Tab icons (absent on plain GNU dev builds).
     apply_window_icon(&window.handle);
 
-    // Every verdict button starts disabled — nothing is selected yet.
+    // Every verdict button starts disabled — nothing is selected yet — and so
+    // does everything on the toolbar that acts on a run, because there is none.
     for control in [&btn_pass, &btn_fail, &btn_blocked, &btn_skip, &btn_note, &btn_evidence] {
         control.set_enabled(false);
     }
+    for control in [&btn_run_new, &btn_run_finish, &btn_history] {
+        control.set_enabled(false);
+    }
+    env_combo.set_enabled(false);
 
     JafizApp {
         window,
         suite_label,
         suite_combo,
         location_label,
+        btn_run_new,
+        btn_run_finish,
+        env_label,
+        env_combo,
+        btn_history,
         scenarios,
         steps,
         btn_pass,
@@ -167,20 +214,17 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
         menu_open,
         menu_reload,
         menu_exit,
-        menu_run_new,
-        menu_run_env,
-        menu_run_finish,
-        menu_run_history,
         menu_report_copy,
         menu_report_save,
         menu_prefs,
         menu_help_format,
         menu_about,
         menu_file,
-        menu_run,
         menu_report,
         menu_tools,
         menu_help,
+        scenarios_w: Cell::new(scenarios_w),
+        dragging: Cell::new(false),
         state: RefCell::new(UiState {
             lang,
             settings,
@@ -196,6 +240,7 @@ pub(crate) fn build_app(settings: AppSettings) -> JafizApp {
             selected_step: None,
             viewed_run: None,
             env_target: EnvTarget::NewRun,
+            env_choices: Vec::new(),
             note_target: None,
         }),
         shared: Arc::new(Mutex::new(Shared::default())),
@@ -227,32 +272,74 @@ fn step_columns(lang: Lang) -> [(usize, i32, &'static str); 5] {
     ]
 }
 
+/// The horizontal bands the window is cut into, top to bottom. `layout` and the
+/// divider's hit test both read them from here, so a drag can never grab a
+/// strip of window the lists do not actually occupy.
+struct Rows {
+    header_y: i32,
+    toolbar_y: i32,
+    list_y: i32,
+    list_h: i32,
+    button_y: i32,
+}
+
+fn rows(height: i32) -> Rows {
+    let header_y = MARGIN;
+    let toolbar_y = header_y + HEADER_H + ROW_GAP;
+    let list_y = toolbar_y + TOOLBAR_H + MARGIN;
+    let button_y = height - STATUS_H - BUTTON_H - MARGIN;
+    Rows { header_y, toolbar_y, list_y, list_h: (button_y - list_y - MARGIN).max(80), button_y }
+}
+
 impl JafizApp {
-    /// Header row across the top, scenarios on the left, steps on the right
-    /// with the verdict buttons under them, status bar at the bottom.
+    /// Header row across the top, the run toolbar under it, scenarios on the
+    /// left, steps on the right with the verdict buttons under them, status bar
+    /// at the bottom.
     pub(crate) fn layout(&self) {
         let (width, height) = self.window.size();
         let (width, height) = (width as i32, height as i32);
-        if width < 560 || height < 320 {
+        if width < MIN_W || height < MIN_H {
             return;
         }
-        let header_y = MARGIN;
-        let list_y = header_y + HEADER_H + MARGIN;
-        let button_y = height - STATUS_H - BUTTON_H - MARGIN;
-        let list_h = (button_y - list_y - MARGIN).max(80) as u32;
+        let rows = rows(height);
 
-        self.suite_label.set_position(MARGIN, header_y + 4);
+        self.suite_label.set_position(MARGIN, rows.header_y + 4);
         self.suite_label.set_size(44, 20);
-        self.suite_combo.set_position(MARGIN + 48, header_y);
+        self.suite_combo.set_position(MARGIN + 48, rows.header_y);
         self.suite_combo.set_size(280, 24);
-        self.location_label.set_position(MARGIN + 340, header_y + 4);
+        self.location_label.set_position(MARGIN + 340, rows.header_y + 4);
         self.location_label.set_size((width - MARGIN - 348).max(80) as u32, 20);
 
-        self.scenarios.set_position(MARGIN, list_y);
-        self.scenarios.set_size(SCENARIOS_W as u32, list_h);
-        let steps_x = MARGIN + SCENARIOS_W + MARGIN;
-        self.steps.set_position(steps_x, list_y);
-        self.steps.set_size((width - steps_x - MARGIN).max(160) as u32, list_h);
+        // The run toolbar: a run's whole life cycle in one row.
+        let mut x = MARGIN;
+        for (control, control_w) in
+            [(&self.btn_run_new, RUN_NEW_W), (&self.btn_run_finish, RUN_FINISH_W)]
+        {
+            control.set_position(x, rows.toolbar_y);
+            control.set_size(control_w as u32, TOOLBAR_H as u32);
+            x += control_w + BUTTON_GAP;
+        }
+        // The two verbs are one group and the environment another; the extra
+        // gap is what says so.
+        x += BUTTON_GAP;
+        self.env_label.set_position(x, rows.toolbar_y + 4);
+        self.env_label.set_size(ENV_LABEL_W as u32, 20);
+        x += ENV_LABEL_W;
+        // Histórico is anchored right and the environment picker takes what is
+        // between: it is the one control on this row whose content has no
+        // length limit, so it is the one that should get the spare width.
+        let history_x = width - MARGIN - HISTORY_W;
+        self.env_combo.set_position(x, rows.toolbar_y);
+        self.env_combo.set_size((history_x - BUTTON_GAP - x).max(80) as u32, 24);
+        self.btn_history.set_position(history_x, rows.toolbar_y);
+        self.btn_history.set_size(HISTORY_W as u32, TOOLBAR_H as u32);
+
+        let scenarios_w = self.scenarios_width(width);
+        self.scenarios.set_position(MARGIN, rows.list_y);
+        self.scenarios.set_size(scenarios_w as u32, rows.list_h as u32);
+        let steps_x = MARGIN + scenarios_w + SPLITTER_W;
+        self.steps.set_position(steps_x, rows.list_y);
+        self.steps.set_size((width - steps_x - MARGIN).max(160) as u32, rows.list_h as u32);
 
         // Anchor the verdict row to the right edge: fixed-width buttons laid
         // out from the steps list would run past the client area at the
@@ -269,10 +356,52 @@ impl JafizApp {
             &self.btn_note,
             &self.btn_evidence,
         ] {
-            button.set_position(x, button_y);
+            button.set_position(x, rows.button_y);
             button.set_size(BUTTON_W as u32, BUTTON_H as u32);
             x += BUTTON_W + BUTTON_GAP;
         }
+    }
+
+    /// How wide the scenario list is in a window this wide: where the tester
+    /// left the divider, clamped so neither list can be squeezed out of
+    /// existence. The stored width is left alone — narrowing the window and
+    /// widening it again puts the divider back where it was put.
+    pub(crate) fn scenarios_width(&self, width: i32) -> i32 {
+        self.scenarios_w.get().clamp(SCENARIOS_W_MIN, splitter_max(width))
+    }
+
+    /// The divider's rectangle in client coordinates: the gap between the two
+    /// lists, which is what the drag grabs and what the sizing cursor covers.
+    /// `None` when the window is too small to have been laid out at all.
+    fn splitter_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let (width, height) = self.window.size();
+        let (width, height) = (width as i32, height as i32);
+        if width < MIN_W || height < MIN_H {
+            return None;
+        }
+        let rows = rows(height);
+        let left = MARGIN + self.scenarios_width(width);
+        Some((left, left + SPLITTER_W, rows.list_y, rows.list_y + rows.list_h))
+    }
+
+    /// Whether a point in client coordinates is on the divider.
+    pub(crate) fn on_splitter(&self, x: i32, y: i32) -> bool {
+        self.splitter_rect().is_some_and(|(left, right, top, bottom)| {
+            x >= left && x < right && y >= top && y < bottom
+        })
+    }
+
+    /// Moves the divider so its left edge follows the cursor and re-lays the
+    /// window out around it. Clamped to the same range `scenarios_width` reads,
+    /// so what is stored is always a width the window can honour.
+    pub(crate) fn drag_splitter_to(&self, x: i32) {
+        let width = self.window.size().0 as i32;
+        let wanted = (x - MARGIN).clamp(SCENARIOS_W_MIN, splitter_max(width));
+        if wanted == self.scenarios_w.get() {
+            return; // same pixel: re-laying out would only cost a repaint
+        }
+        self.scenarios_w.set(wanted);
+        self.layout();
     }
 
     /// Re-captions every visible string after the language changed, the way
@@ -287,6 +416,10 @@ impl JafizApp {
         };
         self.window.set_text(tr.app_title);
         self.suite_label.set_text(tr.lbl_suite);
+        self.btn_run_new.set_text(tr.btn_run_new);
+        self.btn_run_finish.set_text(tr.btn_run_finish);
+        self.env_label.set_text(tr.lbl_env);
+        self.btn_history.set_text(tr.btn_history);
         self.btn_pass.set_text(tr.btn_pass);
         self.btn_fail.set_text(tr.btn_fail);
         self.btn_blocked.set_text(tr.btn_blocked);
@@ -301,6 +434,7 @@ impl JafizApp {
         }
         self.relabel_menus();
         self.set_location_label();
+        // Refills the environment picker too, whose last row is translated.
         self.refresh_all();
     }
 
@@ -309,17 +443,12 @@ impl JafizApp {
     fn relabel_menus(&self) {
         let tr = self.tr();
         set_submenu_text(&self.menu_file, tr.menu_file);
-        set_submenu_text(&self.menu_run, tr.menu_run);
         set_submenu_text(&self.menu_report, tr.menu_report);
         set_submenu_text(&self.menu_tools, tr.menu_tools);
         set_submenu_text(&self.menu_help, tr.menu_help);
         set_menu_item_text(&self.menu_open, tr.menu_open);
         set_menu_item_text(&self.menu_reload, tr.menu_reload);
         set_menu_item_text(&self.menu_exit, tr.menu_exit);
-        set_menu_item_text(&self.menu_run_new, tr.menu_run_new);
-        set_menu_item_text(&self.menu_run_env, tr.menu_run_env);
-        set_menu_item_text(&self.menu_run_finish, tr.menu_run_finish);
-        set_menu_item_text(&self.menu_run_history, tr.menu_run_history);
         set_menu_item_text(&self.menu_report_copy, tr.menu_report_copy);
         set_menu_item_text(&self.menu_report_save, tr.menu_report_save);
         set_menu_item_text(&self.menu_prefs, tr.menu_prefs);
@@ -332,6 +461,13 @@ impl JafizApp {
             unsafe { winapi::um::winuser::DrawMenuBar(hwnd) };
         }
     }
+}
+
+/// The furthest right the divider may sit in a window this wide — never less
+/// than its left stop, so the clamp range stays valid in a window too narrow to
+/// give both lists their minimum.
+fn splitter_max(width: i32) -> i32 {
+    (width - MARGIN * 2 - SPLITTER_W - STEPS_W_MIN).max(SCENARIOS_W_MIN)
 }
 
 /// Rewrites one column header, leaving its width alone — the user may have

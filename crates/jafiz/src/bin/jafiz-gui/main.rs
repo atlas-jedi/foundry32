@@ -189,6 +189,11 @@ pub(crate) struct UiState {
     viewed_run: Option<String>,
     /// What the environment dialog currently on screen was asked for.
     env_target: EnvTarget,
+    /// The environments the toolbar's picker is offering, in its own row order.
+    /// The picker also carries a translated row no run has an environment for
+    /// ("Outro…"), so a selected index cannot be read back off the control —
+    /// this is what each row means.
+    env_choices: Vec<String>,
     /// The scenario id and step number the open note dialog is annotating,
     /// captured when it was spawned. Re-reading the selection when the answer
     /// arrives would attach the note to whatever is selected *then*, which is
@@ -201,6 +206,13 @@ pub(crate) struct JafizApp {
     suite_label: nwg::Label,
     suite_combo: nwg::ComboBox<String>,
     location_label: nwg::Label,
+    // The run toolbar, which replaced the "Execução" menu: a run's whole life
+    // cycle, with each control greyed out when it has nothing to act on.
+    btn_run_new: nwg::Button,
+    btn_run_finish: nwg::Button,
+    env_label: nwg::Label,
+    env_combo: nwg::ComboBox<String>,
+    btn_history: nwg::Button,
     scenarios: nwg::ListView,
     steps: nwg::ListView,
     btn_pass: nwg::Button,
@@ -214,16 +226,12 @@ pub(crate) struct JafizApp {
     menu_open: nwg::MenuItem,
     menu_reload: nwg::MenuItem,
     menu_exit: nwg::MenuItem,
-    menu_run_new: nwg::MenuItem,
-    menu_run_env: nwg::MenuItem,
-    menu_run_finish: nwg::MenuItem,
-    menu_run_history: nwg::MenuItem,
     menu_report_copy: nwg::MenuItem,
     menu_report_save: nwg::MenuItem,
     menu_prefs: nwg::MenuItem,
     menu_help_format: nwg::MenuItem,
     menu_about: nwg::MenuItem,
-    // The five top-level menu-bar entries. `relabel_menus` re-captions them
+    // The four top-level menu-bar entries. `relabel_menus` re-captions them
     // through `foundry_common::ui::set_submenu_text`, one named field each,
     // but they would have to be fields even if nothing read them: `nwg::Menu`'s
     // `Drop` calls `DestroyMenu`, so letting them go out of scope at the end of
@@ -232,10 +240,17 @@ pub(crate) struct JafizApp {
     // fields on purpose: fields drop in declaration order, and `MenuItem`'s
     // `Drop` calls `DeleteMenu` on its parent, which must still exist.
     menu_file: nwg::Menu,
-    menu_run: nwg::Menu,
     menu_report: nwg::Menu,
     menu_tools: nwg::Menu,
     menu_help: nwg::Menu,
+    /// How wide the scenario list is, in client pixels — where the tester left
+    /// the divider between the two lists. A `Cell` rather than a `UiState`
+    /// field because `layout` reads it while the state may be borrowed: it runs
+    /// from the resize handler and from the middle of a drag.
+    scenarios_w: Cell<i32>,
+    /// True between grabbing the divider and letting it go, while this window
+    /// holds the mouse capture.
+    dragging: Cell<bool>,
     state: RefCell<UiState>,
     shared: Arc<Mutex<Shared>>,
 }
@@ -247,6 +262,7 @@ fn main() {
     let settings = AppSettings::load();
     let app = Rc::new(chrome::build_app(settings));
     wire_events(&app);
+    wire_splitter(&app);
     app.layout();
     app.open_initial_location();
     nwg::dispatch_thread_events();
@@ -265,6 +281,12 @@ fn wire_events(app: &Rc<JafizApp>) {
             E::OnComboxBoxSelection if handle == app.suite_combo.handle => {
                 app.load_selected_suite();
             }
+            E::OnComboxBoxSelection if handle == app.env_combo.handle => {
+                app.pick_environment();
+            }
+            E::OnButtonClick if handle == app.btn_run_new.handle => app.new_run(),
+            E::OnButtonClick if handle == app.btn_run_finish.handle => app.finish_run(),
+            E::OnButtonClick if handle == app.btn_history.handle => app.show_history(),
             E::OnButtonClick if handle == app.btn_pass.handle => {
                 app.mark_selected(StepStatus::Pass)
             }
@@ -286,18 +308,10 @@ fn wire_events(app: &Rc<JafizApp>) {
                     app.load_selected_suite();
                 } else if handle == app.menu_exit.handle {
                     nwg::stop_thread_dispatch();
-                } else if handle == app.menu_run_new.handle {
-                    app.new_run();
-                } else if handle == app.menu_run_env.handle {
-                    app.edit_environment();
-                } else if handle == app.menu_run_finish.handle {
-                    app.finish_run();
                 } else if handle == app.menu_help_format.handle {
                     app.show_format_help();
                 } else if handle == app.menu_about.handle {
                     app.show_about();
-                } else if handle == app.menu_run_history.handle {
-                    app.show_history();
                 } else if handle == app.menu_report_copy.handle {
                     app.copy_report();
                 } else if handle == app.menu_report_save.handle {
@@ -335,6 +349,100 @@ fn wire_events(app: &Rc<JafizApp>) {
         }
     });
     std::mem::forget(handler); // lives for the whole process (single window)
+}
+
+/// Id of the divider's raw message hook. Anything up to 0xFFFF is reserved by
+/// nwg, which panics rather than accept one.
+const SPLITTER_HANDLER_ID: usize = 0x1_0000;
+
+/// The divider between the two lists.
+///
+/// nwg has no splitter control and no event for `WM_SETCURSOR`, so the drag is
+/// driven straight off the window's messages through a raw subclass: the sizing
+/// cursor while the pointer is over the gap, the mouse captured while the button
+/// is down, and the layout re-run on every move. There is no control sitting in
+/// the gap — it is bare parent window between the two lists, which is exactly
+/// why the parent sees these messages at all.
+fn wire_splitter(app: &Rc<JafizApp>) {
+    use winapi::shared::windef::{HWND, POINT};
+    use winapi::um::winuser::{
+        GetCursorPos, LoadCursorW, ReleaseCapture, ScreenToClient, SetCapture, SetCursor, HTCLIENT,
+        IDC_SIZEWE, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
+    };
+
+    let weak = Rc::downgrade(app);
+    // The returned token is dropped on purpose, unlike the one `wire_events`
+    // leaks: `RawEventHandler` has no `Drop` of its own — only
+    // `nwg::unbind_raw_event_handler` takes the subclass back off — so the hook
+    // stays installed for as long as the window lives.
+    nwg::bind_raw_event_handler(
+        &app.window.handle,
+        SPLITTER_HANDLER_ID,
+        move |hwnd, msg, wparam, lparam| {
+            let app = weak.upgrade()?;
+            // Every mouse message carries the pointer in the two halves of
+            // lParam, as signed client coordinates. (WM_SETCURSOR does not —
+            // its lParam is the hit-test code, read on its own below.)
+            let x = (lparam & 0xFFFF) as u16 as i16 as i32;
+            let y = ((lparam >> 16) & 0xFFFF) as u16 as i16 as i32;
+            match msg {
+                WM_SETCURSOR => {
+                    // Sent to whichever window the pointer is over, and handed
+                    // up here by every child's DefWindowProc, so the window and
+                    // the hit-test both have to be ours before the cursor is
+                    // touched — otherwise the lists get the sizing cursor too.
+                    if wparam as HWND != hwnd || (lparam & 0xFFFF) != HTCLIENT {
+                        return None;
+                    }
+                    let mut point = POINT { x: 0, y: 0 };
+                    // SAFETY: both calls take a pointer to this stack POINT,
+                    // and `hwnd` is the live window being subclassed.
+                    let located = unsafe {
+                        GetCursorPos(&mut point) != 0 && ScreenToClient(hwnd, &mut point) != 0
+                    };
+                    if !located || !app.on_splitter(point.x, point.y) {
+                        return None;
+                    }
+                    // SAFETY: IDC_SIZEWE is a system cursor, and LoadCursorW
+                    // with a null instance hands back a shared handle that
+                    // nothing has to free.
+                    unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_SIZEWE)) };
+                    Some(1) // TRUE: the cursor is set, stop here
+                }
+                WM_LBUTTONDOWN if app.on_splitter(x, y) => {
+                    app.dragging.set(true);
+                    // Capture, or a pointer that outruns the divider — which it
+                    // will, since the divider stops at the clamp — takes the
+                    // drag with it into whatever window it lands on.
+                    // SAFETY: a live window handle; SetCapture takes no more.
+                    unsafe { SetCapture(hwnd) };
+                    Some(0)
+                }
+                WM_MOUSEMOVE if app.dragging.get() => {
+                    app.drag_splitter_to(x);
+                    Some(0)
+                }
+                WM_LBUTTONUP if app.dragging.get() => {
+                    app.dragging.set(false);
+                    // SAFETY: releases this thread's own capture, no arguments.
+                    unsafe { ReleaseCapture() };
+                    app.remember_splitter();
+                    Some(0)
+                }
+                // Something else took the mouse (Alt+Tab, a modal put up from a
+                // Notice): the drag is over, and the button-up never arrives.
+                // The flag is cleared before `ReleaseCapture` above, so this
+                // cannot fire for a capture this window let go of itself.
+                WM_CAPTURECHANGED if app.dragging.get() => {
+                    app.dragging.set(false);
+                    app.remember_splitter();
+                    None
+                }
+                _ => None,
+            }
+        },
+    )
+    .expect("splitter handler");
 }
 
 /// The row a list-view event points at. nwg reports a selection through two
@@ -556,6 +664,7 @@ impl JafizApp {
         self.populate_scenarios();
         self.populate_steps();
         self.update_buttons();
+        self.update_run_controls();
         self.update_status();
     }
 
@@ -739,6 +848,110 @@ impl JafizApp {
         }
     }
 
+    /// The run toolbar's enabled state — the reason the four run commands left
+    /// the menu bar. `Nova execução` only needs a suite to run against, and
+    /// `Histórico` only needs a run to have happened; the other two edit the
+    /// *active* run, so they need one open **and** on screen. Leaving them live
+    /// while an older run is being read would let a click finish, or re-label,
+    /// a run the tester is not looking at — the same mistake the verdict
+    /// buttons are disabled to prevent.
+    fn update_run_controls(&self) {
+        let (has_suite, recording, has_history) = {
+            // Refilling a list re-enters the selection handlers while
+            // `populate_*` still holds the state borrowed; skipping is right,
+            // because the refill calls back into here afterwards.
+            let Ok(state) = self.state.try_borrow() else { return };
+            (
+                state.suite.is_some(),
+                state.run_file.active().is_some() && !viewing_other_run(&state),
+                !state.run_file.runs.is_empty(),
+            )
+        };
+        self.btn_run_new.set_enabled(has_suite);
+        self.btn_run_finish.set_enabled(recording);
+        self.env_combo.set_enabled(recording);
+        self.btn_history.set_enabled(has_history);
+        self.refresh_env_combo();
+    }
+
+    /// Fills the environment picker: the environment of the run on screen
+    /// first, then every other environment this suite has been run in, newest
+    /// first, and `Outro…` last for typing one that is not in the list.
+    ///
+    /// Re-testing the same build is the common case, which is what makes the
+    /// list worth having — and showing the current environment on the toolbar
+    /// is half of why it is there at all, since a run's environment is what the
+    /// report is read against.
+    fn refresh_env_combo(&self) {
+        let choices = {
+            let Ok(mut state) = self.state.try_borrow_mut() else { return };
+            let current = viewed_run(&state).map(|run| run.environment.clone());
+            let mut choices: Vec<String> = current.into_iter().collect();
+            for run in state.run_file.runs.iter().rev() {
+                if !run.environment.is_empty() && !choices.contains(&run.environment) {
+                    choices.push(run.environment.clone());
+                }
+            }
+            state.env_choices = choices.clone();
+            choices
+        };
+        let tr = self.tr();
+        // An empty list means no run has ever been recorded for this suite —
+        // there is no environment to show and nothing to pick from.
+        let mut rows: Vec<String> = choices
+            .iter()
+            .map(|env| if env.is_empty() { tr.env_unset.to_string() } else { env.clone() })
+            .collect();
+        if !rows.is_empty() {
+            rows.push(tr.env_other.to_string());
+        }
+        let selected = (!rows.is_empty()).then_some(0);
+        // Every verdict comes through here, and rebuilding the list under the
+        // tester's eyes for a run whose environment did not change is a flicker
+        // for nothing. The comparison is against the rendered rows, so a
+        // language change — same environments, translated last row — still
+        // rebuilds. (The `Ref` is dropped at the semicolon: `set_collection`
+        // borrows the same cell mutably.)
+        let unchanged = *self.env_combo.collection() == rows;
+        if !unchanged {
+            self.env_combo.set_collection(rows);
+        }
+        // Always re-selected, even when the rows stayed: this is what puts the
+        // picker back after `Outro…` was chosen and the dialog cancelled.
+        // CB_SETCURSEL raises no selection notification, so it cannot re-enter
+        // `pick_environment` and re-apply what it is only displaying.
+        self.env_combo.set_selection(selected);
+    }
+
+    /// Applies the environment picked on the toolbar. Every row but the last is
+    /// an environment some run already carries; the last one (`Outro…`) has no
+    /// entry in `env_choices` and opens the dialog instead.
+    fn pick_environment(&self) {
+        let Some(index) = self.env_combo.selection() else { return };
+        let chosen = {
+            let Ok(state) = self.state.try_borrow() else { return };
+            state.env_choices.get(index).cloned()
+        };
+        match chosen {
+            Some(environment) => self.apply_environment(&environment),
+            None => self.edit_environment(),
+        }
+    }
+
+    /// Remembers where the divider was dropped, so the next launch opens with
+    /// the lists the tester's own size instead of back at the default.
+    fn remember_splitter(&self) {
+        let width = self.scenarios_w.get();
+        // A modal can be pumping messages while the mouse is still captured;
+        // the position is not worth fighting a borrow over.
+        let Ok(mut state) = self.state.try_borrow_mut() else { return };
+        if state.settings.scenarios_width == Some(width) {
+            return; // unchanged — not worth a disk write per drag
+        }
+        state.settings.scenarios_width = Some(width);
+        let _ = state.settings.save();
+    }
+
     /// Picks a different suite folder. Chosen by hand, so it enters the
     /// cascade as `Explicit` — and this is the only path that remembers a
     /// folder, because it is the only one where the user said which one.
@@ -854,7 +1067,7 @@ impl JafizApp {
             self.warn_no_run();
             return;
         };
-        self.open_env_dialog(lang, environment, t(lang).menu_run_env.trim_end_matches('…'));
+        self.open_env_dialog(lang, environment, t(lang).env_dlg_title);
     }
 
     /// Puts the environment dialog on screen. It runs on its own thread, so
@@ -888,14 +1101,21 @@ impl JafizApp {
                 shared.preferences.take(),
             )
         };
-        if let Some(Some(text)) = environment {
-            // Read out of the borrow before dispatching: both arms borrow the
-            // state mutably.
-            let target = self.state.borrow().env_target;
-            match target {
-                EnvTarget::NewRun => self.apply_new_run(&text),
-                EnvTarget::ActiveRun => self.apply_environment(&text),
+        match environment {
+            Some(Some(text)) => {
+                // Read out of the borrow before dispatching: both arms borrow
+                // the state mutably.
+                let target = self.state.borrow().env_target;
+                match target {
+                    EnvTarget::NewRun => self.apply_new_run(&text),
+                    EnvTarget::ActiveRun => self.apply_environment(&text),
+                }
             }
+            // Cancelled. When the dialog was opened from the toolbar's `Outro…`
+            // row, that row is the one still selected — put the picker back on
+            // the environment the run actually has.
+            Some(None) => self.refresh_env_combo(),
+            None => {}
         }
         match note {
             Some(Some(text)) => self.apply_note(&text),
@@ -930,12 +1150,26 @@ impl JafizApp {
         self.follow_cursor();
     }
 
-    /// Applies a re-typed environment to the run already open.
+    /// Applies a re-typed — or re-picked — environment to the run already open.
     fn apply_environment(&self, environment: &str) {
         {
             let mut state = self.state.borrow_mut();
+            // Nothing to write when it did not change: the toolbar's picker
+            // re-selects the environment it is already showing every time the
+            // list is rebuilt, and every save is a disk write.
+            let same = state
+                .run_file
+                .active()
+                .is_some_and(|run| run.environment == environment.trim());
+            if same {
+                return;
+            }
             if !runs::set_environment(&mut state.run_file, environment) {
-                return; // the run was finished while the dialog was up
+                // The run was finished while the dialog was up. Drop the borrow
+                // first: the picker reads the state to put itself back.
+                drop(state);
+                self.refresh_env_combo();
+                return;
             }
         }
         self.save_runs();
@@ -1134,6 +1368,7 @@ impl JafizApp {
             self.select_step_number(number);
         }
         self.update_buttons();
+        self.update_run_controls();
     }
 
     /// Moves the selection to wherever the active run says testing is now.

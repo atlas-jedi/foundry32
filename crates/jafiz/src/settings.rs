@@ -17,6 +17,10 @@ pub struct AppSettings {
     pub last_location: Option<PathBuf>,
     /// The suite stem the GUI had selected last.
     pub last_suite: Option<String>,
+    /// Where the GUI's divider between the scenario list and the step list was
+    /// left, in client pixels. `None` until the user first drags it — the
+    /// window's own default is not worth writing to disk.
+    pub scenarios_width: Option<i32>,
 }
 
 fn settings_dir() -> PathBuf {
@@ -45,6 +49,7 @@ impl AppSettings {
                 .unwrap_or_default(),
             last_location: value["last_location"].as_str().map(PathBuf::from),
             last_suite: value["last_suite"].as_str().map(str::to_string),
+            scenarios_width: value["scenarios_width"].as_i64().map(|width| width as i32),
         }
     }
 
@@ -57,6 +62,7 @@ impl AppSettings {
             "locations": self.locations.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "last_location": self.last_location.as_ref().map(|p| p.display().to_string()),
             "last_suite": self.last_suite,
+            "scenarios_width": self.scenarios_width,
         })
         .to_string();
         std::fs::write(settings_file(), body).map_err(|e| e.to_string())
