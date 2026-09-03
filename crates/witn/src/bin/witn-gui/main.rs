@@ -15,7 +15,8 @@ use i18n::{detect_system_lang, t, Lang, T};
 
 use foundry_common::theme::{apply_classic_button_theme, apply_explorer_theme};
 use foundry_common::ui::{
-    apply_window_icon, insert_report_list_view_column, set_list_view_sort_indicator,
+    apply_window_icon, ensure_visible, insert_report_list_view_column, select_only,
+    set_list_view_sort_indicator,
 };
 use native_windows_gui as nwg;
 use std::cell::RefCell;
@@ -74,9 +75,36 @@ struct UiState {
     /// Column the list is sorted by and whether it is descending; `None` is
     /// the default process tree.
     sort: Option<(usize, bool)>,
-    /// Index into `procs` (not into the displayed rows) of the selection.
-    selected: Option<usize>,
+    /// The selected process, held by identity rather than by position. Every
+    /// scan builds a fresh `procs`, so an index into it survives no refresh:
+    /// it would land on whatever process the new scan happens to put there.
+    selected: Option<ProcKey>,
     paused: bool,
+}
+
+/// What identifies a process across refreshes. The PID alone does not —
+/// Windows recycles them — which is why `tree` already pairs a PID with the
+/// process's start time to reject PID-recycled parents; the selection uses
+/// the same identity.
+type ProcKey = (u32, u64);
+
+fn key_of(p: &NodeProc) -> ProcKey {
+    (p.pid, p.start_filetime)
+}
+
+impl UiState {
+    /// The displayed row of the selected process, if the last scan still
+    /// lists it.
+    fn selected_row(&self) -> Option<usize> {
+        let key = self.selected?;
+        self.order.iter().position(|&i| self.procs.get(i).map(key_of) == Some(key))
+    }
+
+    /// The selected process itself, if the last scan still lists it.
+    fn selected_proc(&self) -> Option<&NodeProc> {
+        let key = self.selected?;
+        self.procs.iter().find(|p| key_of(p) == key)
+    }
 }
 
 struct WitnApp {
@@ -345,10 +373,18 @@ impl WitnApp {
         state.order = order;
     }
 
+    /// Refills the list from `order`, then puts the selection back on the row
+    /// holding the same process.
+    ///
+    /// The state stays borrowed for the whole refill on purpose: emptying and
+    /// refilling the list makes Windows emit selection changes of its own, and
+    /// `select_row` drops the ones that arrive while the borrow is held (see
+    /// there). They describe a half-rebuilt list; the selection restored at the
+    /// end of this function is the one that counts.
     fn populate(&self) {
-        self.listview.clear();
-        {
+        let restored = {
             let state = self.state.borrow();
+            self.listview.clear();
             let flattened = state.sort.is_some();
             for &index in &state.order {
                 let Some(p) = state.procs.get(index) else { continue };
@@ -373,20 +409,35 @@ impl WitnApp {
                 self.listview.insert_items_row(None, &row);
             }
             set_list_view_sort_indicator(&self.listview, state.sort.map(|(c, d)| (c as i32, d)));
+            match state.selected_row() {
+                Some(row) => {
+                    select_only(&self.listview, row);
+                    // The refill scrolled back to the top, so the restored row
+                    // has to be brought back into view to be a selection the
+                    // user can still see.
+                    ensure_visible(&self.listview, row);
+                    true
+                }
+                None => false,
+            }
+        };
+        if !restored {
+            // Either nothing was selected, or the selected process is gone —
+            // it exited, or this scan no longer sees it. Nothing left to act on.
+            self.state.borrow_mut().selected = None;
         }
-        self.state.borrow_mut().selected = None;
-        self.btn_kill.set_enabled(false);
-        self.btn_open.set_enabled(false);
+        self.btn_kill.set_enabled(restored);
+        self.btn_open.set_enabled(restored);
         self.update_status();
     }
 
     fn select_row(&self, row: usize) {
         // Refilling the list makes Windows emit selection changes of its own.
-        // Those land while `populate` still holds the state borrowed — and it
-        // clears the selection right after — so dropping them is both safe and
-        // the behavior we want.
+        // Those land while `populate` still holds the state borrowed, and they
+        // describe rows of a list that is halfway rebuilt — populate restores
+        // the real selection itself, so dropping them is the behavior we want.
         let Ok(mut state) = self.state.try_borrow_mut() else { return };
-        let selected = state.order.get(row).copied();
+        let selected = state.order.get(row).and_then(|&i| state.procs.get(i)).map(key_of);
         state.selected = selected;
         drop(state);
         self.btn_kill.set_enabled(selected.is_some());
@@ -407,8 +458,7 @@ impl WitnApp {
     fn kill_selected(&self) {
         let (pid, label) = {
             let state = self.state.borrow();
-            let Some(i) = state.selected else { return };
-            let Some(p) = state.procs.get(i) else { return };
+            let Some(p) = state.selected_proc() else { return };
             (p.pid, p.app_name.clone())
         };
         let all = proctree::all_processes();
@@ -444,8 +494,7 @@ impl WitnApp {
     fn open_selected(&self) {
         let dir = {
             let state = self.state.borrow();
-            let Some(i) = state.selected else { return };
-            let Some(p) = state.procs.get(i) else { return };
+            let Some(p) = state.selected_proc() else { return };
             p.cwd.clone().or_else(|| {
                 appname::app_location(p.cmdline.as_deref(), p.cwd.as_deref()).map(|loc| {
                     if loc.is_file() {

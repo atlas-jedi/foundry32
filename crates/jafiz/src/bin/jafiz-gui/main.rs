@@ -27,6 +27,7 @@ mod run_dialog;
 use i18n::{t, Lang, T};
 
 use native_windows_gui as nwg;
+pub(crate) use foundry_common::ui::{ensure_visible, select_only};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -453,34 +454,6 @@ fn changed_row(data: &nwg::EventData) -> Option<usize> {
         nwg::EventData::OnListViewItemIndex { row_index, .. } => Some(row_index),
         nwg::EventData::OnListViewItemChanged { row_index, selected: true, .. } => Some(row_index),
         _ => None,
-    }
-}
-
-/// Moves a list view's selection to exactly one row.
-///
-/// `select_item` only *adds* to the selection — neither list is `LVS_SINGLESEL`
-/// — so the rows the cursor moved off are cleared first. Otherwise every
-/// advance would leave another row highlighted behind it, and the tester would
-/// be looking at a list that claims three steps are current.
-fn select_only(list: &nwg::ListView, row: usize) {
-    for selected in list.selected_items() {
-        if selected != row {
-            list.select_item(selected, false);
-        }
-    }
-    list.select_item(row, true);
-}
-
-/// Scrolls a row into view. A scenario can have more steps than the list
-/// shows, and a current step the tester has to scroll to find defeats the
-/// point of the marker moving on its own. nwg has no wrapper for this one.
-fn ensure_visible(list: &nwg::ListView, row: usize) {
-    use winapi::um::commctrl::LVM_ENSUREVISIBLE;
-    let Some(hwnd) = list.handle.hwnd() else { return };
-    // SAFETY: a live list-view HWND, and LVM_ENSUREVISIBLE takes no pointer —
-    // wParam is the row index and lParam a "partial is enough" flag.
-    unsafe {
-        winapi::um::winuser::SendMessageW(hwnd, LVM_ENSUREVISIBLE, row, 0);
     }
 }
 
