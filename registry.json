@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "registry_version": 5,
+  "registry_version": 6,
   "tools": [
     {
       "id": "mcp-console",
@@ -10,7 +10,7 @@
       "description_pt": "Inspecione e gerencie os servidores MCP que sua instalação do Claude Code conhece, com escopo claro (conta, máquina ou projeto).",
       "version": "2.0.1",
       "exe": "mcp-console.exe",
-      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.1/mcp-console.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.2/mcp-console.exe",
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32"
@@ -21,16 +21,16 @@
       "publisher": "Software Imperial",
       "description_en": "Where Is The Node? Shows which app every node.exe on the machine belongs to — project, path, listening ports, RAM, CPU — and ends a whole process tree in one click. Ships the witn CLI on your PATH.",
       "description_pt": "Where Is The Node? Mostra a qual app pertence cada node.exe da máquina — projeto, caminho, portas em escuta, RAM, CPU — e encerra a árvore inteira num clique. Inclui o CLI witn no seu PATH.",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "exe": "witn-gui.exe",
-      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.1/witn-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.2/witn-gui.exe",
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32",
       "companions": [
         {
           "exe": "witn.exe",
-          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.1/witn.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.2/witn.exe",
           "sha256": "",
           "size_bytes": 0
         }
@@ -45,14 +45,14 @@
       "description_pt": "Já fiz? — execute cenários de teste manual passo a passo: marque cada passo como passou, falhou ou bloqueado, com observação e evidência, e devolva o resultado ao Claude com `jafiz report`. Inclui o CLI jafiz no seu PATH.",
       "version": "1.1.0",
       "exe": "jafiz-gui.exe",
-      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.1/jafiz-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.2/jafiz-gui.exe",
       "sha256": "",
       "size_bytes": 0,
       "homepage": "https://github.com/atlas-jedi/foundry32",
       "companions": [
         {
           "exe": "jafiz.exe",
-          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.1/jafiz.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.2/jafiz.exe",
           "sha256": "",
           "size_bytes": 0
         }
