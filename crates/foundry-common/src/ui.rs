@@ -1,7 +1,8 @@
 //! Small Win32 shims that native-windows-gui lacks or gets wrong: in-place menu
 //! caption updates (for runtime language switching), a report-view list column
 //! insert that sidesteps an nwg bug, the window icon nwg only half-sets, and
-//! list-view header sort arrows. Self-contained (nwg + winapi only).
+//! list-view header sort arrows, and single-row list-view selection.
+//! Self-contained (nwg + winapi only).
 
 use native_windows_gui as nwg;
 
@@ -164,5 +165,31 @@ pub fn set_list_view_sort_indicator(listview: &nwg::ListView, sort: Option<(i32,
             }
             SendMessageW(header, HDM_SETITEMW, column as usize, &mut item as *mut HDITEMW as isize);
         }
+    }
+}
+
+/// Moves a list view's selection to exactly one row.
+///
+/// `nwg::ListView::select_item` only *adds* to the selection — our lists are
+/// not `LVS_SINGLESEL` — so the rows the selection moved off are cleared
+/// first. Otherwise every move would leave another row highlighted behind it.
+pub fn select_only(listview: &nwg::ListView, row: usize) {
+    for selected in listview.selected_items() {
+        if selected != row {
+            listview.select_item(selected, false);
+        }
+    }
+    listview.select_item(row, true);
+}
+
+/// Scrolls a row into view. nwg has no wrapper for this one.
+pub fn ensure_visible(listview: &nwg::ListView, row: usize) {
+    use winapi::um::commctrl::LVM_ENSUREVISIBLE;
+    use winapi::um::winuser::SendMessageW;
+    let Some(handle) = listview.handle.hwnd() else { return };
+    // SAFETY: a live list-view HWND, and LVM_ENSUREVISIBLE takes no pointer —
+    // wParam is the row index and lParam a "partial is enough" flag.
+    unsafe {
+        SendMessageW(handle, LVM_ENSUREVISIBLE, row, 0);
     }
 }
