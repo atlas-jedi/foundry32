@@ -35,7 +35,7 @@ as an offline fallback.
 | Tool | What it does |
 |---|---|
 | **MCP Console** | See and manage every MCP server your [Claude Code](https://code.claude.com) install knows about — with a clear answer to *"if I change this here, does it change on my other computers too?"* Labels each server's reach (account / machine / project), shows health, and edits the file-based ones via the official `claude mcp` CLI (never by hand-editing `~/.claude.json`). Env var **names** shown, values never read. |
-| **WITN** | *Where Is The Node?* — answers "which of these twenty `node.exe` is holding port 3000?" Lists every Node process grouped as a tree, naming the **app** behind it (project from its `package.json`, script or tool from its command line), with its folder, listening ports, RAM, CPU and uptime. Click any column header to sort by it (ascending, descending, then back to the tree). Ends a whole process tree in one click, and opens the app's folder in Explorer. Also installs a `witn` CLI **on your PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
+| **WITN** | *Where Is The Node?* — answers "which of these twenty `node.exe` is holding port 3000?" Lists every Node process grouped as a tree, naming the **app** behind it (project from its `package.json`, script or tool from its command line), with its folder, listening ports, RAM, CPU and uptime. Click any column header to sort by it (ascending, descending, then back to the tree). Ends a whole process tree in one click, and opens the app's location in Explorer. **Search** finds a term everywhere a node can be tied to it (app location, current directory, command line, `node.exe`, environment variables such as PATH, who started it, and its process tree) and says where. Right-click → **Details**: Process Explorer-style tabs (General, Origin, Performance, Network, Environment), including **who started** the process, even an orphan. Also installs a `witn` CLI **on your PATH**: `witn list`, `witn port 3000`, `witn find game-visual`, `witn info <PID>`, `witn kill 3000`. |
 | **JAFIZ** | *Já fiz?* — manual test scenarios that survive the conversation. Claude writes the suite as ordinary Markdown; you run it and mark **every step** pass, fail, blocked or skipped, with a note and evidence; Claude reads the outcome back with `jafiz report` — no copy-paste in either direction. Keeps a full run history with the environment each pass ran against. Also installs a `jafiz` CLI **on your PATH**: `jafiz list`, `jafiz check`, `jafiz report`. |
 
 More tools land in the catalog over time — the hub picks them up without needing
@@ -81,7 +81,7 @@ RAM) and have no such requirement.
 Headless modes for scripting/verification: `foundry32.exe --dump-catalog [file]`,
 `--check-update [file]` and `--dump-path [file]` (the user PATH as stored, plus
 which tool directories are published on it); `mcp-console.exe --dump [file]`;
-`witn.exe list` / `--dump [file]`; `jafiz.exe list` / `check <file>` /
+`witn.exe list` / `find <term>` / `info <PID>` / `--dump [file]`; `jafiz.exe list` / `check <file>` /
 `--dump [file]`.
 
 ## License
