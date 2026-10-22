@@ -1,5 +1,7 @@
-//! Bilingual (pt-BR / en) strings for the WITN GUI. `%N`/`%S`/`%A` are filled in
-//! at use. The `Lang` selector and system detection are shared workspace-wide.
+//! Bilingual (pt-BR / en) strings for the WITN GUI's own chrome (window,
+//! menus, buttons, status). `%N`/`%S`/`%A`/`%M`/`%Q`/`%P` are filled in at use.
+//! The Details report's field names live in the engine (`witn::report`), shared
+//! with `witn info`. The `Lang` selector and system detection are shared workspace-wide.
 
 pub use foundry_common::lang::{detect_system_lang, Lang};
 
@@ -25,6 +27,30 @@ pub struct T {
     pub kill_title: &'static str,
     pub kill_body: &'static str,
     pub empty: &'static str,
+    pub search_placeholder: &'static str,
+    pub col_found: &'static str,
+    pub status_filtered: &'static str,
+    pub status_query: &'static str,
+    pub menu_details: &'static str,
+    pub menu_open_app: &'static str,
+    pub menu_open_cwd: &'static str,
+    pub menu_copy: &'static str,
+    pub menu_copy_pid: &'static str,
+    pub menu_copy_cmdline: &'static str,
+    pub menu_copy_app: &'static str,
+    pub menu_copy_cwd: &'static str,
+    pub menu_kill: &'static str,
+    pub det_title: &'static str,
+    pub det_refresh: &'static str,
+    pub det_copy_all: &'static str,
+    pub det_close: &'static str,
+    pub det_show_secrets: &'static str,
+    pub det_exited: &'static str,
+    pub det_copied: &'static str,
+    pub det_col_property: &'static str,
+    pub det_col_value: &'static str,
+    pub det_copy_value: &'static str,
+    pub det_copy_row: &'static str,
 }
 
 static PT: T = T {
@@ -49,6 +75,30 @@ static PT: T = T {
     kill_title: "Encerrar processo",
     kill_body: "Encerrar %A e toda a sua árvore de processos (%N no total)?",
     empty: "Nenhum processo node.exe em execução.",
+    search_placeholder: "Buscar em tudo: pasta, diretório de trabalho, comando, ambiente, origem…  (Ctrl+F)",
+    col_found: "Encontrado em",
+    status_filtered: "%M de %N processos node",
+    status_query: "busca: %Q",
+    menu_details: "Detalhes",
+    menu_open_app: "Abrir local do app",
+    menu_open_cwd: "Abrir diretório de trabalho",
+    menu_copy: "Copiar",
+    menu_copy_pid: "PID",
+    menu_copy_cmdline: "Linha de comando",
+    menu_copy_app: "Local do app",
+    menu_copy_cwd: "Diretório de trabalho",
+    menu_kill: "Encerrar árvore de processos…",
+    det_title: "Detalhes — %A (PID %P)",
+    det_refresh: "Atualizar",
+    det_copy_all: "Copiar tudo",
+    det_close: "Fechar",
+    det_show_secrets: "Mostrar valores sensíveis",
+    det_exited: "O processo foi encerrado; mostrando a última leitura.",
+    det_copied: "Copiado para a área de transferência.",
+    det_col_property: "Propriedade",
+    det_col_value: "Valor",
+    det_copy_value: "Copiar valor",
+    det_copy_row: "Copiar linha",
 };
 
 static EN: T = T {
@@ -73,6 +123,30 @@ static EN: T = T {
     kill_title: "End process",
     kill_body: "End %A and its whole process tree (%N total)?",
     empty: "No node.exe processes running.",
+    search_placeholder: "Search everything: folder, current directory, command, environment, origin…  (Ctrl+F)",
+    col_found: "Found in",
+    status_filtered: "%M of %N node processes",
+    status_query: "search: %Q",
+    menu_details: "Details",
+    menu_open_app: "Open app location",
+    menu_open_cwd: "Open current directory",
+    menu_copy: "Copy",
+    menu_copy_pid: "PID",
+    menu_copy_cmdline: "Command line",
+    menu_copy_app: "App location",
+    menu_copy_cwd: "Current directory",
+    menu_kill: "End process tree…",
+    det_title: "Details — %A (PID %P)",
+    det_refresh: "Refresh",
+    det_copy_all: "Copy all",
+    det_close: "Close",
+    det_show_secrets: "Show sensitive values",
+    det_exited: "The process has exited; showing the last reading.",
+    det_copied: "Copied to the clipboard.",
+    det_col_property: "Property",
+    det_col_value: "Value",
+    det_copy_value: "Copy value",
+    det_copy_row: "Copy row",
 };
 
 pub fn t(lang: Lang) -> &'static T {

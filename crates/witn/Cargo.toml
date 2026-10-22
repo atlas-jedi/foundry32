@@ -22,7 +22,7 @@ winapi = { version = "0.3.9", features = [
 ] }
 native-windows-gui = { version = "1.0.13", features = [
     "list-view", "notice", "status-bar", "message-window", "menu",
-    "embed-resource", "high-dpi", "cursor", "tooltip",
+    "embed-resource", "high-dpi", "cursor", "tooltip", "tabs", "clipboard",
 ] }
 
 [build-dependencies]
