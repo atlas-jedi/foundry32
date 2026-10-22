@@ -28,6 +28,7 @@ pub mod peb;
 pub mod ports;
 pub mod procscan;
 pub mod proctree;
+pub mod search;
 pub mod tree;
 
 pub use model::NodeProc;

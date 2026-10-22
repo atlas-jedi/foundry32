@@ -96,6 +96,14 @@ pub enum Evidence {
 }
 
 impl NodeProc {
+    /// Where the app's code lives (see `appname::app_location`), falling back
+    /// to the node.exe it runs on. The one definition the list column, the
+    /// "Open location" action, the CLI and the search all share.
+    pub fn app_location(&self) -> Option<PathBuf> {
+        crate::appname::app_location(self.cmdline.as_deref(), self.cwd.as_deref())
+            .or_else(|| self.exe_path.clone())
+    }
+
     /// Working set in whole mebibytes, for compact display.
     pub fn mem_mib(&self) -> u64 {
         self.mem_bytes / (1024 * 1024)
