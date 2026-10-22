@@ -21,6 +21,7 @@
 //! asInvoker posture.
 
 pub mod appname;
+pub mod details;
 pub mod model;
 pub mod origin;
 pub mod peb;

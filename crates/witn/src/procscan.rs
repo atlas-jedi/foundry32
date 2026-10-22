@@ -197,7 +197,7 @@ fn image_path(handle: HANDLE) -> Option<PathBuf> {
 }
 
 /// Returns `(creation_filetime, kernel+user busy time)` in 100 ns units.
-fn process_times(handle: HANDLE) -> (u64, u64) {
+pub(crate) fn process_times(handle: HANDLE) -> (u64, u64) {
     unsafe {
         let mut creation: FILETIME = std::mem::zeroed();
         let mut exit: FILETIME = std::mem::zeroed();
