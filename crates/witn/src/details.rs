@@ -113,11 +113,9 @@ pub struct Details {
 /// PID was recycled) since the scan comes back with `alive: false` and only
 /// what needs no handle — never another process's data under its name.
 pub fn inspect(p: &NodeProc) -> Details {
-    let snapshot = proctree::all_processes();
     let mut details = Details {
         started: local_time(p.start_filetime),
         node_version: p.exe_path.as_deref().and_then(file_version),
-        threads: snapshot.iter().find(|e| e.pid == p.pid).map(|e| e.threads),
         ancestors: with_command_lines(&p.origin.ancestors),
         descendants: with_command_lines(&p.origin.descendants),
         ..Details::default()
@@ -135,8 +133,8 @@ pub fn inspect(p: &NodeProc) -> Details {
         details.handles = handle_count(handle);
         details.priority = priority_from_class(unsafe { GetPriorityClass(handle) });
         details.endpoints = ports::endpoints_of(p.pid);
-    } else {
-        details.threads = None;
+        // Read only once the PID is known to still be this process.
+        details.threads = proctree::all_processes().iter().find(|e| e.pid == p.pid).map(|e| e.threads);
     }
     unsafe {
         CloseHandle(handle);
@@ -170,15 +168,20 @@ pub fn local_time(ft: u64) -> Option<LocalTime> {
     }
 }
 
-/// Copies of `refs` with each command line read from its PEB (when the
-/// process still exists and lets us read it).
+/// Copies of `refs` with each command line read from its PEB — only when the
+/// PID is provably still the same process (same start time). A process that
+/// exited, or whose start time was never known, keeps no command line rather
+/// than borrowing the one of whoever holds its PID now.
 fn with_command_lines(refs: &[ProcRef]) -> Vec<ProcRef> {
     refs.iter()
         .map(|r| {
             let mut copy = r.clone();
+            if r.start_filetime == 0 {
+                return copy;
+            }
             if let Some(handle) = open(r.pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ) {
                 let (start_ft, _) = procscan::process_times(handle);
-                if r.start_filetime == 0 || start_ft == r.start_filetime {
+                if start_ft == r.start_filetime {
                     copy.cmdline = peb::read_params(handle).cmdline;
                 }
                 unsafe {

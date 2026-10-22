@@ -157,6 +157,8 @@ pub fn is_sensitive_env(name: &str, value: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     upper.split('_').any(|word| WORDS.contains(&word))
         || SUFFIXES.iter().any(|suffix| upper.ends_with(suffix))
+        // `MYSQL_PWD` is a password; bare `PWD`/`OLDPWD` are shells' cwd.
+        || upper.ends_with("_PWD")
         || url_has_credentials(value)
 }
 
@@ -216,6 +218,7 @@ mod tests {
             "PGPASSWORD",
             "npm_config__auth",
             "GH_PAT",
+            "MYSQL_PWD",
         ] {
             assert!(is_sensitive_env(name, "x"), "{name} should be masked");
         }
@@ -223,7 +226,7 @@ mod tests {
 
     #[test]
     fn ordinary_names_are_not_sensitive() {
-        for name in ["PATH", "NODE_ENV", "GIT_AUTHOR_NAME", "CLAUDE_CODE_SESSION_ID", "MONKEY_COUNT", "PWD"] {
+        for name in ["PATH", "NODE_ENV", "GIT_AUTHOR_NAME", "CLAUDE_CODE_SESSION_ID", "MONKEY_COUNT", "PWD", "OLDPWD"] {
             assert!(!is_sensitive_env(name, "x"), "{name} should be shown");
         }
     }

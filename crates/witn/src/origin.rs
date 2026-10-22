@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::model::{Evidence, Launcher, Origin, ProcRef};
-use crate::proctree::{self, ProcEntry};
+use crate::proctree::ProcEntry;
 
 /// Longest ancestor chain followed. Real chains are 3–6 deep; the cap only
 /// guards against a pathological snapshot.
@@ -165,16 +165,46 @@ fn from_environment(env: &[(String, String)], is_alive: &dyn Fn(u32) -> bool) ->
 }
 
 /// Every process below `pid`, breadth-first, without `pid` itself.
-pub fn descendants(entries: &[ProcEntry], pid: u32) -> Vec<ProcRef> {
-    proctree::subtree(entries, pid)
-        .into_iter()
-        .skip(1)
-        .map(|entry| ProcRef {
-            pid: entry.pid,
-            exe_name: entry.exe_name,
-            ..ProcRef::default()
-        })
-        .collect()
+///
+/// A process that names a parent but started *before* it is not its child:
+/// its real parent was an earlier owner of that PID. Such a process — and
+/// everything below it — is left out, the mirror image of the ancestor rule.
+/// An unknown start time (0) cannot be checked and is let through; the
+/// details read never attributes data to a `ProcRef` whose start is unknown.
+pub fn descendants(
+    entries: &[ProcEntry],
+    pid: u32,
+    start_ft: u64,
+    start_of: &dyn Fn(u32) -> u64,
+) -> Vec<ProcRef> {
+    let mut children: HashMap<u32, Vec<&ProcEntry>> = HashMap::new();
+    for entry in entries {
+        if entry.pid != entry.ppid {
+            children.entry(entry.ppid).or_default().push(entry);
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen = HashSet::from([pid]);
+    let mut queue = std::collections::VecDeque::from([(pid, start_ft)]);
+    while let Some((parent, parent_start)) = queue.pop_front() {
+        for child in children.get(&parent).into_iter().flatten() {
+            if !seen.insert(child.pid) {
+                continue;
+            }
+            let child_start = start_of(child.pid);
+            if child_start != 0 && parent_start != 0 && child_start < parent_start {
+                continue; // a false child — PID-recycled parent
+            }
+            out.push(ProcRef {
+                pid: child.pid,
+                exe_name: child.exe_name.clone(),
+                start_filetime: child_start,
+                cmdline: None,
+            });
+            queue.push_back((child.pid, child_start));
+        }
+    }
+    out
 }
 
 /// The whole [`Origin`] of one process, from a snapshot taken once per scan.
@@ -199,7 +229,7 @@ pub fn origin_of(
         launcher: launcher(&chain, env, &is_alive),
         ancestors: chain,
         parent_gone,
-        descendants: descendants(entries, pid),
+        descendants: descendants(entries, pid, start_ft, start_of),
     }
 }
 
@@ -326,7 +356,23 @@ mod tests {
 
     #[test]
     fn descendants_exclude_the_process_itself() {
-        let kids = descendants(&lineage(), 100);
+        let kids = descendants(&lineage(), 100, 40, &starts(&[(100, 40), (110, 50)]));
         assert_eq!(kids.iter().map(|p| p.pid).collect::<Vec<_>>(), vec![110]);
+        assert_eq!(kids[0].start_filetime, 50, "the start time travels with the child");
+    }
+
+    #[test]
+    fn descendants_skip_a_child_older_than_its_parent() {
+        // 110 names 100 as parent, but started before 100 did: its real parent
+        // was an earlier owner of PID 100. Its own child 111 goes with it.
+        let entries = vec![
+            entry(100, 1, "node.exe"),
+            entry(110, 100, "chrome.exe"),
+            entry(111, 110, "chrome.exe"),
+            entry(120, 100, "esbuild.exe"),
+        ];
+        let times = [(100, 40), (110, 30), (111, 35), (120, 50)];
+        let kids = descendants(&entries, 100, 40, &starts(&times));
+        assert_eq!(kids.iter().map(|p| p.pid).collect::<Vec<_>>(), vec![120]);
     }
 }

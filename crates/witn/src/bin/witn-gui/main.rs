@@ -342,6 +342,10 @@ fn wire_events(app: &Rc<WitnApp>) {
             }
             // Double-click or Enter on a row: Details, as in Process Explorer.
             E::OnListViewItemActivated if handle == app.listview.handle => app.show_details(),
+            // nwg's message loop runs IsDialogMessage, which turns Enter into
+            // IDOK before the list view sees it — so Enter arrives here, not
+            // as an activation. Only when the list has the focus.
+            E::OnKeyEnter if has_focus(&app.listview.handle) => app.show_details(),
             E::OnListViewRightClick if handle == app.listview.handle => {
                 // A right-click on empty space reports row -1 (usize::MAX here).
                 if let nwg::EventData::OnListViewItemIndex { row_index, .. } = evt_data {
@@ -681,6 +685,11 @@ impl WitnApp {
             insert_report_list_view_column(&self.listview, COL_FOUND as i32, 320, t(state.lang).col_found);
         } else if !wanted && state.found_column {
             self.listview.remove_column(COL_FOUND);
+            // A sort by the column just removed would leave the list flat with
+            // no header to click back to the tree.
+            if matches!(state.sort, Some((COL_FOUND, _))) {
+                state.sort = None;
+            }
         }
         state.found_column = wanted;
     }
@@ -776,6 +785,13 @@ fn open_in_explorer(path: &Path) {
         command.arg(path);
     }
     let _ = command.creation_flags(CREATE_NO_WINDOW).spawn();
+}
+
+/// Whether a control has the keyboard focus.
+fn has_focus(handle: &nwg::ControlHandle) -> bool {
+    use winapi::um::winuser::GetFocus;
+    // SAFETY: GetFocus takes no arguments and returns this thread's focus HWND.
+    handle.hwnd().is_some_and(|hwnd| unsafe { GetFocus() } == hwnd)
 }
 
 /// Whether Ctrl is held right now (for Ctrl+F, read at key release).

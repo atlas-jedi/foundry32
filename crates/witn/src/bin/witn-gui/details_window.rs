@@ -54,25 +54,38 @@ pub struct DetailsParams {
 /// the front. Returns immediately; the window lives on its own thread.
 pub fn open(params: DetailsParams) {
     let key = key_of(&params.proc);
-    {
+    // Decide under the lock, act after releasing it: the window belongs to
+    // another thread, and nothing that waits on that thread may run while
+    // this lock is held — its `close()` takes the same lock.
+    let existing = {
         let mut open = params.registry.lock().unwrap();
-        if let Some(&hwnd) = open.get(&key) {
-            if hwnd != 0 {
-                bring_to_front(hwnd);
-            }
-            return; // either up already, or about to be
+        let existing = open.get(&key).copied();
+        if existing.is_none() {
+            open.insert(key, 0);
         }
-        open.insert(key, 0);
+        existing
+    };
+    match existing {
+        Some(0) => {} // its thread is still building it
+        Some(hwnd) => bring_to_front(hwnd),
+        None => {
+            std::thread::spawn(move || run(params));
+        }
     }
-    std::thread::spawn(move || run(params));
 }
 
+/// Raises another thread's window without waiting on that thread:
+/// `ShowWindowAsync` posts instead of sending, so a Details window busy in
+/// Atualizar cannot freeze the main list. A maximized window stays maximized
+/// — only a minimized one is restored.
 fn bring_to_front(hwnd: isize) {
     use winapi::shared::windef::HWND;
-    use winapi::um::winuser::{SetForegroundWindow, ShowWindow, SW_RESTORE};
-    // SAFETY: an HWND this process created; both calls tolerate a stale one.
+    use winapi::um::winuser::{IsIconic, SetForegroundWindow, ShowWindowAsync, SW_RESTORE};
+    // SAFETY: an HWND this process created; all three calls tolerate a stale one.
     unsafe {
-        ShowWindow(hwnd as HWND, SW_RESTORE);
+        if IsIconic(hwnd as HWND) != 0 {
+            ShowWindowAsync(hwnd as HWND, SW_RESTORE);
+        }
         SetForegroundWindow(hwnd as HWND);
     }
 }
