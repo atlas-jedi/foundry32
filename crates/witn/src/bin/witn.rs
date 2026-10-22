@@ -1,14 +1,15 @@
 //! `witn.exe` — the console front-end (goes on PATH).
 //!
-//! Commands: `list`, `port <porta>`, `kill <porta | --pid PID> [-y]`, plus
-//! `--dump` / `--help`. Running with no args will open the GUI once
+//! Commands: `list`, `port <porta>`, `find <termo>`, `info <PID>`,
+//! `kill <porta | --pid PID> [-y]`, plus `--dump` / `--help`. Running with no args will open the GUI once
 //! `witn-gui.exe` exists (Phase 3); for now it prints help.
 
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 
-use witn::model::{format_uptime, NodeProc};
-use witn::{proctree, tree, Scanner};
+use witn::model::{format_uptime, Lang, NodeProc};
+use witn::search::{self, Query};
+use witn::{details, proctree, report, tree, Scanner};
 
 /// Detaches a launched GUI from this console so the terminal returns immediately.
 const DETACHED_PROCESS: u32 = 0x0000_0008;
@@ -18,6 +19,8 @@ fn main() {
     match args.get(1).map(String::as_str) {
         Some("list") => cmd_list(),
         Some("port") => cmd_port(&args[2..]),
+        Some("find") => cmd_find(&args[2..]),
+        Some("info") => cmd_info(&args[2..]),
         Some("kill") => cmd_kill(&args[2..]),
         Some("--dump") => cmd_dump(args.get(2).map(String::as_str)),
         Some("--help") | Some("-h") => print_help(),
@@ -76,6 +79,54 @@ fn cmd_port(rest: &[String]) {
     }
     for p in matches {
         print_detail(p);
+    }
+}
+
+/// `witn find <termo>` — every node process tied to the term, and where.
+fn cmd_find(rest: &[String]) {
+    let Some(query) = Query::parse(&rest.join(" ")) else {
+        eprintln!("uso: witn find <termo>   (ex.: witn find game-visual, witn find *server.js, witn find :3000)");
+        return;
+    };
+    let forest = tree::build(scan_twice());
+    let mut found = 0;
+    for p in &forest {
+        let hits = search::matches(p, &query);
+        if hits.is_empty() {
+            continue;
+        }
+        found += 1;
+        println!("{}  (PID {})", p.app_name, p.pid);
+        println!("  Encontrado em:          {}", report::hits_summary(&hits, Lang::PtBr));
+        println!("  Local do app:           {}", app_path(p));
+        println!(
+            "  Diretório de trabalho:  {}",
+            p.cwd.as_ref().map_or_else(|| "—".to_string(), |c| c.display().to_string())
+        );
+        println!();
+    }
+    println!("{found} de {} processos node batem com \"{}\".", forest.len(), query.text());
+}
+
+/// `witn info <PID> [--mostrar-segredos]` — the Details report as text.
+fn cmd_info(rest: &[String]) {
+    let show_secrets = rest.iter().any(|a| a == "--mostrar-segredos" || a == "--show-secrets");
+    let Some(pid) = rest.iter().find(|a| !a.starts_with('-')).and_then(|s| s.parse::<u32>().ok()) else {
+        eprintln!("uso: witn info <PID> [--mostrar-segredos]");
+        return;
+    };
+    let forest = tree::build(scan_twice());
+    let Some(p) = forest.iter().find(|p| p.pid == pid) else {
+        println!("PID {pid} não é um processo node em execução.");
+        return;
+    };
+    let d = details::inspect(p);
+    let sections = report::build(p, &d, Lang::PtBr);
+    let header = format!("{}  (PID {})", p.app_name, p.pid);
+    // The report uses CRLF for the Windows clipboard; the console wants LF.
+    print!("{}", report::to_text(&header, &sections, show_secrets).replace("\r\n", "\n"));
+    if !show_secrets {
+        println!("\n(valores sensíveis mascarados — use --mostrar-segredos para ver)");
     }
 }
 
@@ -215,6 +266,9 @@ fn print_help() {
     println!("USO:");
     println!("  witn list                    lista os node.exe (árvore, portas, CPU, RAM, uptime)");
     println!("  witn port <porta>            mostra quem está escutando a porta");
+    println!("  witn find <termo>            busca o termo em tudo: pasta do app, diretório de trabalho,");
+    println!("                               linha de comando, node.exe, ambiente (PATH...) e origem");
+    println!("  witn info <PID>              detalhes: origem (quem iniciou), memória, rede, ambiente");
     println!("  witn kill <porta> [-y]       encerra quem escuta a porta, e sua árvore (confirma; -y pula)");
     println!("  witn kill --pid <PID> [-y]   encerra por PID, e sua árvore");
     println!("  witn --dump [arq]            grava a lista num arquivo (verificação headless)");
@@ -223,12 +277,9 @@ fn print_help() {
     println!("Sem argumentos, o witn abrirá a interface gráfica (em breve).");
 }
 
-/// The app's on-disk location (script/project), never the shared node.exe path.
+/// The app's on-disk location (script/project), see `NodeProc::app_location`.
 fn app_path(p: &NodeProc) -> String {
-    witn::appname::app_location(p.cmdline.as_deref(), p.cwd.as_deref())
-        .or_else(|| p.exe_path.clone())
-        .map(|x| x.display().to_string())
-        .unwrap_or_else(|| "—".to_string())
+    p.app_location().map_or_else(|| "—".to_string(), |x| x.display().to_string())
 }
 
 /// First non-flag argument parsed as a port number.
