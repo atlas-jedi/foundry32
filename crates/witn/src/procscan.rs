@@ -1,25 +1,21 @@
-//! Enumerating `node.exe` processes and reading the per-process facts that do
-//! NOT require cross-process memory reads: image path, times (uptime + CPU),
-//! and working-set memory. Command line and cwd need `ReadProcessMemory` of the
-//! target's PEB and live in a later phase (they are architecture-sensitive), so
-//! `cmdline`/`cwd` come back `None` here.
+//! Enumerating `node.exe` processes and reading what WITN shows about each:
+//! image path, times (uptime + CPU), working-set memory, listening ports, the
+//! PEB's command line / cwd / environment (`peb`), and the process's lineage
+//! (`origin`). Everything comes from one process snapshot per sample.
 
 use crate::appname;
 use crate::model::{NodeProc, Origin};
-use crate::ports;
+use crate::{origin, ports, proctree};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use winapi::shared::minwindef::{DWORD, FILETIME};
-use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+use winapi::um::handleapi::CloseHandle;
 use winapi::um::processthreadsapi::{GetProcessTimes, OpenProcess};
 use winapi::um::psapi::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use winapi::um::sysinfoapi::{GetSystemInfo, GetSystemTimeAsFileTime, SYSTEM_INFO};
-use winapi::um::tlhelp32::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use winapi::um::winbase::QueryFullProcessImageNameW;
 use winapi::um::winnt::{HANDLE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ};
 
@@ -65,7 +61,15 @@ impl Scanner {
     /// to nest them into the display forest.
     pub fn sample(&mut self) -> Vec<NodeProc> {
         let now = now_100ns();
-        let pairs = enumerate_node_pids();
+        // One snapshot of every process serves both the node list and each
+        // node's lineage, so the two can never disagree about who exists.
+        let all = proctree::all_processes();
+        let start_of = origin::start_time_cache(start_filetime_of);
+        let pairs: Vec<(u32, u32)> = all
+            .iter()
+            .filter(|e| e.exe_name.eq_ignore_ascii_case("node.exe"))
+            .map(|e| (e.pid, e.ppid))
+            .collect();
         let port_map = ports::listening_by_pid();
 
         let mut next_prev = HashMap::with_capacity(pairs.len());
@@ -109,6 +113,7 @@ impl Scanner {
                 0
             };
             let app_name = appname::derive(exe_path.as_deref(), cmdline.as_deref(), cwd.as_deref());
+            let origin = origin::origin_of(&all, pid, start_ft, &env, &start_of);
 
             out.push(NodeProc {
                 pid,
@@ -124,7 +129,7 @@ impl Scanner {
                 start_filetime: start_ft,
                 depth: 0,
                 env,
-                origin: Origin::default(),
+                origin,
             });
         }
 
@@ -154,36 +159,18 @@ fn minimal(pid: u32, ppid: u32, ports: Vec<u16>) -> NodeProc {
     }
 }
 
-/// All `node.exe` PIDs with their parent PID, via a process snapshot.
-fn enumerate_node_pids() -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap == INVALID_HANDLE_VALUE {
-            return out;
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as DWORD;
-        if Process32FirstW(snap, &mut entry) != 0 {
-            loop {
-                if exe_name_is_node(&entry.szExeFile) {
-                    out.push((entry.th32ProcessID, entry.th32ParentProcessID));
-                }
-                if Process32NextW(snap, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(snap);
+/// A process's creation time as a FILETIME, 0 when it cannot be opened (an
+/// elevated or protected process, or one that already exited).
+pub fn start_filetime_of(pid: u32) -> u64 {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return 0;
     }
-    out
-}
-
-/// Case-insensitive match of a NUL-terminated wide exe name against `node.exe`.
-fn exe_name_is_node(wide: &[u16]) -> bool {
-    let len = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
-    let name = String::from_utf16_lossy(&wide[..len]);
-    name.eq_ignore_ascii_case("node.exe")
+    let (start_ft, _) = process_times(handle);
+    unsafe {
+        CloseHandle(handle);
+    }
+    start_ft
 }
 
 /// Opens a process for the limited queries we need. Works for the user's own

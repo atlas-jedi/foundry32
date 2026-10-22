@@ -63,8 +63,8 @@ pub struct ProcRef {
 pub struct Origin {
     /// Parent first, then the parent's parent, …, up to the first break.
     pub ancestors: Vec<ProcRef>,
-    /// The PID the chain broke at: the parent this process names no longer
-    /// exists (or the PID now belongs to a younger process). `Some` = orphan.
+    /// The PID of this process's own parent when that parent no longer exists
+    /// (or the PID now belongs to a younger process). `Some` = orphan.
     pub parent_gone: Option<u32>,
     /// The program a person would say "started it" — see `origin::launcher`.
     pub launcher: Option<Launcher>,

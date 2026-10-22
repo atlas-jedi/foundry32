@@ -22,6 +22,7 @@
 
 pub mod appname;
 pub mod model;
+pub mod origin;
 pub mod peb;
 pub mod ports;
 pub mod procscan;
