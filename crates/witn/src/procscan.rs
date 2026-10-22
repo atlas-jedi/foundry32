@@ -5,7 +5,7 @@
 //! `cmdline`/`cwd` come back `None` here.
 
 use crate::appname;
-use crate::model::NodeProc;
+use crate::model::{NodeProc, Origin};
 use crate::ports;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -81,7 +81,7 @@ impl Scanner {
             let exe_path = image_path(handle);
             let (start_ft, busy_100ns) = process_times(handle);
             let mem_bytes = working_set(handle);
-            let (cmdline, cwd) = crate::peb::read_params(handle);
+            let crate::peb::ProcParams { cmdline, cwd, env } = crate::peb::read_params(handle);
             unsafe {
                 CloseHandle(handle);
             }
@@ -123,6 +123,8 @@ impl Scanner {
                 uptime_secs,
                 start_filetime: start_ft,
                 depth: 0,
+                env,
+                origin: Origin::default(),
             });
         }
 
@@ -147,6 +149,8 @@ fn minimal(pid: u32, ppid: u32, ports: Vec<u16>) -> NodeProc {
         uptime_secs: 0,
         start_filetime: 0,
         depth: 0,
+        env: Vec::new(),
+        origin: Origin::default(),
     }
 }
 
