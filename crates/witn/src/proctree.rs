@@ -21,6 +21,8 @@ pub struct ProcEntry {
     pub pid: u32,
     pub ppid: u32,
     pub exe_name: String,
+    /// Thread count at snapshot time (`cntThreads`).
+    pub threads: u32,
 }
 
 /// Snapshot of every process on the machine (pid, parent pid, exe file name).
@@ -39,6 +41,7 @@ pub fn all_processes() -> Vec<ProcEntry> {
                     pid: entry.th32ProcessID,
                     ppid: entry.th32ParentProcessID,
                     exe_name: wide_to_string(&entry.szExeFile),
+                    threads: entry.cntThreads,
                 });
                 if Process32NextW(snap, &mut entry) == 0 {
                     break;

@@ -32,7 +32,7 @@ embutida como fallback offline.
 | Ferramenta | O que faz |
 |---|---|
 | **MCP Console** | Mostra e gerencia todos os MCP servers que o seu [Claude Code](https://code.claude.com) conhece — respondendo com clareza a *"se eu alterar isto aqui, altera também nos meus outros computadores?"* Rotula o alcance de cada servidor (conta / máquina / projeto), mostra o status de saúde e edita os baseados em arquivo via CLI oficial `claude mcp` (nunca editando `~/.claude.json` na mão). Mostra os **nomes** das variáveis de ambiente; valores nunca são lidos. |
-| **WITN** | *Where Is The Node?* — responde "qual desses vinte `node.exe` está ocupando a porta 3000?". Lista cada processo Node agrupado em árvore, nomeando o **app** por trás dele (projeto a partir do `package.json`, script ou ferramenta a partir da linha de comando), com pasta, portas em escuta, RAM, CPU e tempo de atividade. Clique em qualquer cabeçalho de coluna para ordenar por ele (crescente, decrescente, depois de volta à árvore). Encerra uma árvore de processos inteira com um clique, e abre a pasta do app no Explorer. Também instala um CLI `witn` **no seu PATH**: `witn list`, `witn port 3000`, `witn kill 3000`. |
+| **WITN** | *Where Is The Node?* — responde "qual desses vinte `node.exe` está ocupando a porta 3000?". Lista cada processo Node agrupado em árvore, nomeando o **app** por trás dele (projeto a partir do `package.json`, script ou ferramenta a partir da linha de comando), com pasta, portas em escuta, RAM, CPU e tempo de atividade. Clique em qualquer cabeçalho de coluna para ordenar por ele (crescente, decrescente, depois de volta à árvore). Encerra uma árvore de processos inteira com um clique, e abre o local do app no Explorer. A **busca** acha um termo em tudo que liga um node a ele (pasta do app, diretório de trabalho, linha de comando, `node.exe`, variáveis de ambiente como o PATH, quem o iniciou e a árvore de processos) e diz onde achou. Clique direito → **Detalhes**: abas no estilo do Process Explorer (Geral, Origem, Desempenho, Rede, Ambiente), com **quem iniciou** o processo, mesmo órfão. Também instala um CLI `witn` **no seu PATH**: `witn list`, `witn port 3000`, `witn find game-visual`, `witn info <PID>`, `witn kill 3000`. |
 | **JAFIZ** | *Já fiz?* — cenários de teste manual que sobrevivem à conversa. O Claude escreve a suíte como Markdown comum; você a executa e marca **cada passo** como passou, falhou, bloqueado ou pulado, com observação e evidência; o Claude lê o resultado de volta com `jafiz report` — sem copiar e colar em nenhuma direção. Mantém um histórico completo das execuções, com o ambiente de cada passagem. Também instala um CLI `jafiz` **no seu PATH**: `jafiz list`, `jafiz check`, `jafiz report`. |
 
 Mais ferramentas entram no catálogo com o tempo — o hub as reconhece sem
@@ -77,7 +77,7 @@ e RAM) e não têm esse requisito.
 
 Modos headless para script/verificação: `foundry32.exe --dump-catalog [arquivo]`
 e `--check-update [arquivo]`; `mcp-console.exe --dump [arquivo]`;
-`witn.exe list` / `--dump [arquivo]`; `jafiz.exe list` / `check <arquivo>` /
+`witn.exe list` / `find <termo>` / `info <PID>` / `--dump [arquivo]`; `jafiz.exe list` / `check <arquivo>` /
 `--dump [arquivo]`.
 
 ## Licença

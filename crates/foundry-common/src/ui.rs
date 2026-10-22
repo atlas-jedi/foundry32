@@ -1,7 +1,8 @@
 //! Small Win32 shims that native-windows-gui lacks or gets wrong: in-place menu
 //! caption updates (for runtime language switching), a report-view list column
 //! insert that sidesteps an nwg bug, the window icon nwg only half-sets, and
-//! list-view header sort arrows, and single-row list-view selection.
+//! list-view header sort arrows, single-row list-view selection, and context
+//! menus that return the chosen command.
 //! Self-contained (nwg + winapi only).
 
 use native_windows_gui as nwg;
@@ -191,5 +192,66 @@ pub fn ensure_visible(listview: &nwg::ListView, row: usize) {
     // wParam is the row index and lParam a "partial is enough" flag.
     unsafe {
         SendMessageW(handle, LVM_ENSUREVISIBLE, row, 0);
+    }
+}
+
+/// One line of a [`popup_menu`].
+pub enum MenuEntry<'a> {
+    /// A command. `id` must be non-zero (0 is "dismissed"); `default` draws it
+    /// bold, the item a double-click would run.
+    Item { id: usize, text: &'a str, enabled: bool, default: bool },
+    Separator,
+    Submenu { text: &'a str, items: Vec<MenuEntry<'a>> },
+}
+
+/// Shows a context menu at the mouse cursor and returns the chosen item's id,
+/// or `None` when it was dismissed. Synchronous (`TPM_RETURNCMD`): the choice
+/// comes back as the return value, no WM_COMMAND routing needed.
+pub fn popup_menu(owner: &nwg::ControlHandle, entries: &[MenuEntry]) -> Option<usize> {
+    use winapi::shared::windef::{HMENU, POINT};
+    use winapi::um::winuser::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow, SetMenuDefaultItem,
+        TrackPopupMenu, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TPM_TOPALIGN,
+    };
+    let hwnd = owner.hwnd()?;
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+
+    // SAFETY: every HMENU is created here and owned by `root`; DestroyMenu on
+    // the root frees the submenus attached with MF_POPUP.
+    unsafe fn fill(menu: HMENU, entries: &[MenuEntry], wide: &dyn Fn(&str) -> Vec<u16>) {
+        for entry in entries {
+            match entry {
+                MenuEntry::Item { id, text, enabled, default } => {
+                    let flags = if *enabled { MF_STRING } else { MF_STRING | MF_GRAYED };
+                    AppendMenuW(menu, flags, *id, wide(text).as_ptr());
+                    if *default {
+                        SetMenuDefaultItem(menu, *id as u32, 0);
+                    }
+                }
+                MenuEntry::Separator => {
+                    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+                }
+                MenuEntry::Submenu { text, items } => {
+                    let sub = CreatePopupMenu();
+                    fill(sub, items, wide);
+                    AppendMenuW(menu, MF_POPUP, sub as usize, wide(text).as_ptr());
+                }
+            }
+        }
+    }
+
+    unsafe {
+        let root = CreatePopupMenu();
+        fill(root, entries, &wide);
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        // Without this the menu does not close when the user clicks elsewhere
+        // (documented TrackPopupMenu behavior).
+        SetForegroundWindow(hwnd);
+        let flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN;
+        let chosen = TrackPopupMenu(root, flags, pt.x, pt.y, 0, hwnd, std::ptr::null());
+        DestroyMenu(root);
+        (chosen > 0).then_some(chosen as usize)
     }
 }

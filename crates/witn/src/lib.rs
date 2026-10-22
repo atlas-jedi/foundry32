@@ -21,11 +21,15 @@
 //! asInvoker posture.
 
 pub mod appname;
+pub mod details;
 pub mod model;
+pub mod origin;
 pub mod peb;
 pub mod ports;
 pub mod procscan;
 pub mod proctree;
+pub mod report;
+pub mod search;
 pub mod tree;
 
 pub use model::NodeProc;
