@@ -185,6 +185,7 @@ fn entry_to_json(entry: &Entry) -> Value {
         "time": entry.time,
         "task": entry.task,
         "text": entry.text,
+        "description": entry.description,
         "author": entry.author.code(),
         "created_at": entry.created_at,
         "updated_at": entry.updated_at,
@@ -204,8 +205,32 @@ fn entry_from_json(value: &Value, date: Date, index: usize) -> Entry {
         time: text_of("time"),
         task: text_of("task"),
         text: text_of("text"),
+        // Missing in files written before descriptions existed: none.
+        description: text_of("description"),
         author: value["author"].as_str().and_then(Author::from_code).unwrap_or(Author::User),
         created_at: text_of("created_at"),
         updated_at: text_of("updated_at"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{entry_from_json, entry_to_json};
+    use crate::clock::Date;
+    use serde_json::json;
+
+    #[test]
+    fn a_day_written_before_descriptions_loads_with_none() {
+        let date = Date::parse("2026-11-03").unwrap();
+        let old = json!({ "id": "20261103-090000", "time": "09:00", "task": "", "text": "x", "author": "user" });
+        assert_eq!(entry_from_json(&old, date, 0).description, "");
+    }
+
+    #[test]
+    fn description_survives_a_save_and_load() {
+        let date = Date::parse("2026-11-04").unwrap();
+        let old = json!({ "id": "20261104-090000", "text": "x", "description": "a\n\nb" });
+        let entry = entry_from_json(&old, date, 0);
+        assert_eq!(entry_from_json(&entry_to_json(&entry), date, 0).description, "a\n\nb");
     }
 }

@@ -41,6 +41,10 @@ pub struct Entry {
     pub task: String,
     /// One line of text.
     pub text: String,
+    /// Free notes on the entry, any number of lines; empty means none. Only
+    /// the edit dialog shows it: the list and the stand-up report read the
+    /// one-line `text` alone.
+    pub description: String,
     pub author: Author,
     pub created_at: String,
     pub updated_at: String,
@@ -149,4 +153,28 @@ pub fn tally(day: &Day) -> Tally {
 /// spaces, runs of blanks collapse, the ends are trimmed.
 pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Tidies typed notes: `\n` line breaks whatever the control used (the edit
+/// control hands back `\r\n`), no trailing blanks on any line, no blank lines
+/// before or after the text. Line breaks and blank lines in between are the
+/// user's and stay.
+pub fn tidy_description(text: &str) -> String {
+    text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tidy_description;
+
+    #[test]
+    fn description_keeps_inner_lines_and_drops_the_padding() {
+        let typed = "  first line   \r\n\r\nthird line\t\r\n\r\n";
+        assert_eq!(tidy_description(typed), "first line\n\nthird line");
+    }
+
+    #[test]
+    fn blank_description_is_none() {
+        assert_eq!(tidy_description(" \r\n \r\n"), "");
+    }
 }

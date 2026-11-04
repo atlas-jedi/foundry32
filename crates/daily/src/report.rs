@@ -107,12 +107,20 @@ fn entry_json(entry: &Entry) -> Value {
     })
 }
 
-/// `daily list --json`: every entry of the day, in time order.
+/// `daily list --json`: every entry of the day, in time order, each with its
+/// description — the one place outside the edit dialog that has it. The
+/// report leaves it out: the stand-up reads the one-line text alone.
 pub fn list_json(day: &Day, date: Date) -> Value {
-    json!({
-        "date": date.iso(),
-        "entries": day.sorted().into_iter().map(entry_json).collect::<Vec<_>>(),
-    })
+    let entries: Vec<Value> = day
+        .sorted()
+        .into_iter()
+        .map(|entry| {
+            let mut value = entry_json(entry);
+            value["description"] = json!(entry.description);
+            value
+        })
+        .collect();
+    json!({ "date": date.iso(), "entries": entries })
 }
 
 /// `daily report --json`: the day grouped by task. `key` is the grouping key

@@ -5,7 +5,7 @@
 //! of one saving an old copy over the other's entry.
 
 use crate::clock::{self, Date};
-use crate::model::{one_line, Author, Day, Entry};
+use crate::model::{one_line, tidy_description, Author, Day, Entry};
 use crate::store;
 use foundry_common::lang::Lang;
 use std::path::Path;
@@ -60,6 +60,8 @@ pub struct NewEntry {
     pub time: Option<String>,
     pub task: String,
     pub text: String,
+    /// Empty = no description.
+    pub description: String,
     pub author: Author,
 }
 
@@ -69,6 +71,8 @@ pub struct EntryChange {
     pub text: Option<String>,
     pub task: Option<String>,
     pub time: Option<String>,
+    /// `Some("")` clears the description.
+    pub description: Option<String>,
     pub author: Author,
 }
 
@@ -97,6 +101,7 @@ pub fn add_entry(dir: &Path, new: NewEntry) -> Result<Entry, EditError> {
         time,
         task: one_line(&new.task),
         text,
+        description: tidy_description(&new.description),
         author: new.author,
         created_at: now.clone(),
         updated_at: now,
@@ -130,6 +135,9 @@ pub fn update_entry(dir: &Path, id: &str, change: EntryChange) -> Result<Entry, 
     }
     if let Some(time) = time {
         entry.time = time;
+    }
+    if let Some(description) = change.description.as_deref() {
+        entry.description = tidy_description(description);
     }
     entry.author = change.author;
     entry.updated_at = clock::timestamp();

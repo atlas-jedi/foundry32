@@ -20,7 +20,8 @@ use foundry_common::lang::Lang;
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 /// Flags that take a value, and flags that stand alone.
-const VALUE_FLAGS: [&str; 8] = ["--date", "--task", "--time", "--by", "--text", "--days", "--examples", "--out"];
+const VALUE_FLAGS: [&str; 9] =
+    ["--date", "--task", "--time", "--by", "--text", "--desc", "--days", "--examples", "--out"];
 const SWITCHES: [&str; 3] = ["--ontem", "--yesterday", "--json"];
 
 const DEFAULT_TASK_DAYS: i64 = 14;
@@ -165,6 +166,7 @@ fn cmd_add(dir: &Path, parsed: &Parsed, lang: Lang) -> ExitCode {
         time: parsed.value("--time").map(str::to_string),
         task: parsed.value("--task").unwrap_or_default().to_string(),
         text,
+        description: parsed.value("--desc").unwrap_or_default().to_string(),
         author,
     };
     match edit::add_entry(dir, new) {
@@ -224,10 +226,11 @@ fn cmd_edit(dir: &Path, parsed: &Parsed, lang: Lang) -> ExitCode {
         text: parsed.value("--text").map(str::to_string),
         task: parsed.value("--task").map(str::to_string),
         time: parsed.value("--time").map(str::to_string),
+        description: parsed.value("--desc").map(str::to_string),
         author,
     };
-    if change.text.is_none() && change.task.is_none() && change.time.is_none() {
-        return usage_error("daily edit precisa de --text, --task ou --time");
+    if change.text.is_none() && change.task.is_none() && change.time.is_none() && change.description.is_none() {
+        return usage_error("daily edit precisa de --text, --task, --time ou --desc");
     }
     match edit::update_entry(dir, id, change) {
         Ok(entry) => {
@@ -338,11 +341,13 @@ fn print_help() {
     println!("DAILY — o que fiz hoje  (v{})", env!("CARGO_PKG_VERSION"));
     println!();
     println!("USO:");
-    println!("  daily add \"<texto>\" [--task <rótulo>] [--date AAAA-MM-DD] [--time HH:MM] [--by user|claude]");
-    println!("                                 grava uma anotação (padrão --by claude)");
+    println!("  daily add \"<texto>\" [--task <rótulo>] [--desc <descrição>] [--date AAAA-MM-DD] [--time HH:MM]");
+    println!("            [--by user|claude]   grava uma anotação (padrão --by claude)");
     println!("  daily list [--date D | --ontem] [--json]     anotações do dia, com o id de cada uma");
+    println!("                                 (a descrição só sai no --json)");
     println!("  daily report [--date D | --ontem] [--json]   o dia agrupado por task (o texto da daily)");
-    println!("  daily edit <id> [--text …] [--task …] [--time HH:MM] [--by user|claude]");
+    println!("  daily edit <id> [--text …] [--task …] [--time HH:MM] [--desc …] [--by user|claude]");
+    println!("                                 --desc \"\" apaga a descrição");
     println!("  daily rm <id>                  apaga uma anotação");
     println!("  daily tasks [--days 14]        rótulos de task usados nos últimos dias");
     println!("  daily style [--examples 25]    as últimas anotações escritas na janela (o jeito de escrever)");
