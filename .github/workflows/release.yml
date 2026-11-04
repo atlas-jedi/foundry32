@@ -167,6 +167,8 @@ jobs:
             dist/witn-gui.exe
             dist/jafiz.exe
             dist/jafiz-gui.exe
+            dist/daily.exe
+            dist/daily-gui.exe
             dist/registry.json
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true

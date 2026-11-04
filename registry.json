@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "registry_version": 7,
+  "registry_version": 8,
   "tools": [
     {
       "id": "mcp-console",
@@ -53,6 +53,28 @@
         {
           "exe": "jafiz.exe",
           "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.2.3/jafiz.exe",
+          "sha256": "",
+          "size_bytes": 0
+        }
+      ],
+      "expose_on_path": true
+    },
+    {
+      "id": "daily",
+      "name": "DAILY",
+      "publisher": "Software Imperial",
+      "description_en": "Write down what you did during the day and take the list to the stand-up, grouped by task. Claude reads and writes it too, matching how you write. Ships the daily CLI on your PATH.",
+      "description_pt": "Anote durante o dia o que você fez e leve para a daily a lista agrupada por task. O Claude também lê e escreve nela, no seu jeito de escrever. Inclui o CLI daily no seu PATH.",
+      "version": "1.0.0",
+      "exe": "daily-gui.exe",
+      "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.3.0/daily-gui.exe",
+      "sha256": "",
+      "size_bytes": 0,
+      "homepage": "https://github.com/atlas-jedi/foundry32",
+      "companions": [
+        {
+          "exe": "daily.exe",
+          "download_url": "https://github.com/atlas-jedi/foundry32/releases/download/v2.3.0/daily.exe",
           "sha256": "",
           "size_bytes": 0
         }
