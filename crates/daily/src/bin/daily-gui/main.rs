@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use daily::edit::{self, EntryChange, NewEntry};
-use daily::model::{group_key, one_line, tally};
+use daily::model::{group_key, one_line, tally, tidy_description};
 use daily::settings::AppSettings;
 use daily::{report, store, Author, Date, Day, Entry};
 use foundry_common::ui::{popup_menu, select_only, ensure_visible, set_list_view_sort_indicator, MenuEntry};
@@ -450,7 +450,15 @@ impl DailyApp {
             let state = self.state.borrow();
             (state.dir.clone(), state.date, state.lang)
         };
-        let new = NewEntry { date, time: None, task: self.task_input.text(), text, author: Author::User };
+        // No description from the form: it is written in the edit dialog.
+        let new = NewEntry {
+            date,
+            time: None,
+            task: self.task_input.text(),
+            text,
+            description: String::new(),
+            author: Author::User,
+        };
         match edit::add_entry(&dir, new) {
             Ok(entry) => {
                 self.text_input.set_text("");
@@ -508,6 +516,7 @@ impl DailyApp {
             task: entry.task,
             text: entry.text,
             time: entry.time,
+            description: entry.description,
             shared: Arc::clone(&self.shared),
             notify: self.notice.sender(),
         });
@@ -525,6 +534,7 @@ impl DailyApp {
                 entry.text == one_line(&answer.text)
                     && entry.task == one_line(&answer.task)
                     && entry.time == answer.time.trim()
+                    && entry.description == tidy_description(&answer.description)
             });
             (state.dir.clone(), state.lang, unchanged)
         };
@@ -535,6 +545,7 @@ impl DailyApp {
             text: Some(answer.text),
             task: Some(answer.task),
             time: Some(answer.time),
+            description: Some(answer.description),
             author: Author::User,
         };
         match edit::update_entry(&dir, &id, change) {

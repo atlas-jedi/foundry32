@@ -50,6 +50,7 @@ pub struct T {
     // Edit dialog.
     pub edit_title: &'static str,
     pub dlg_time: &'static str,
+    pub dlg_description: &'static str,
     pub dlg_ok: &'static str,
     pub dlg_cancel: &'static str,
     // Preferences.
@@ -98,6 +99,7 @@ static PT: T = T {
     error_title: "DAILY",
     edit_title: "Editar anotação",
     dlg_time: "Hora:",
+    dlg_description: "Descrição:",
     dlg_ok: "OK",
     dlg_cancel: "Cancelar",
     pref_title: "Preferências",
@@ -145,6 +147,7 @@ static EN: T = T {
     error_title: "DAILY",
     edit_title: "Edit entry",
     dlg_time: "Time:",
+    dlg_description: "Description:",
     dlg_ok: "OK",
     dlg_cancel: "Cancel",
     pref_title: "Preferences",
