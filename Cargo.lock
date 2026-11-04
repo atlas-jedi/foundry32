@@ -87,6 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "daily"
+version = "1.0.0"
+dependencies = [
+ "embed-resource",
+ "foundry-common",
+ "native-windows-gui",
+ "serde_json",
+ "winapi",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
