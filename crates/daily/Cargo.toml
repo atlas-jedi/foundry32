@@ -1,0 +1,29 @@
+# DAILY — a Foundry32 tool for writing down what you did during the day and
+# reading it back, grouped by task, at the stand-up. One engine crate, two thin
+# front-ends built from it: `daily.exe` (console, goes on PATH — the CLI Claude
+# runs) and `daily-gui.exe` (GUI, launched by the hub). The two-binary split is
+# a Windows subsystem necessity, the same one JAFIZ and WITN have — see src/lib.rs.
+[package]
+name = "daily"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DAILY — write down what you did during the day and read it back, grouped by task, at the stand-up."
+
+[dependencies]
+foundry-common = { path = "../foundry-common" }
+serde_json = "1"
+# `timezoneapi` is the calendar arithmetic (SystemTimeToFileTime and back) that
+# lets the engine step from one day to the next without a date crate.
+winapi = { version = "0.3.9", features = [
+    "winbase", "minwinbase", "sysinfoapi", "timezoneapi", "wincon", "winuser",
+    "commctrl", "libloaderapi", "processenv",
+] }
+native-windows-gui = { version = "1.0.13", features = [
+    "list-view", "notice", "status-bar", "message-window", "menu", "combobox",
+    "textbox", "clipboard", "embed-resource", "high-dpi", "cursor",
+] }
+
+[build-dependencies]
+embed-resource = "2"

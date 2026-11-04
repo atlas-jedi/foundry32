@@ -1,9 +1,10 @@
-# Deterministic icon generator for the Foundry32 workspace. Produces four
+# Deterministic icon generator for the Foundry32 workspace. Produces five
 # multi-resolution .ico files with distinct classic-flavored motifs:
 #   Foundry32   -> a hot anvil (the forge/foundry)
 #   MCP Console -> a ">_" terminal prompt
 #   WITN        -> a magnifier over a node hexagon (finding the node)
 #   JAFIZ       -> a clipboard checklist (pass, fail, pending)
+#   DAILY       -> a day sheet: a calendar page with notes written on it
 # Run from anywhere: powershell -ExecutionPolicy Bypass -File assets\generate-icons.ps1
 Add-Type -AssemblyName System.Drawing
 
@@ -163,6 +164,40 @@ $DrawJafiz = {
     $boxPen.Dispose()
 }
 
+# DAILY: a calendar day sheet — a warm header band with two binder rings and
+# three written lines below. Reads at 16 px as "today's page, with notes".
+$DrawDaily = {
+    param($g, [float]$s)
+    Draw-Plate $g $s (Argb 255 32 28 26)
+
+    $paper = Argb 255 238 236 230
+    $ink = Argb 255 120 128 140
+    $amber = Argb 255 232 138 52
+
+    # The page.
+    $paperBrush = New-Object System.Drawing.SolidBrush($paper)
+    $g.FillRectangle($paperBrush, ($s * 0.20), ($s * 0.22), ($s * 0.60), ($s * 0.62))
+    $paperBrush.Dispose()
+
+    # Header band, the day's colour.
+    $bandBrush = New-Object System.Drawing.SolidBrush($amber)
+    $g.FillRectangle($bandBrush, ($s * 0.20), ($s * 0.22), ($s * 0.60), ($s * 0.17))
+    $bandBrush.Dispose()
+
+    # Two binder rings over the band's top edge.
+    $ringBrush = New-Object System.Drawing.SolidBrush((Argb 255 70 66 62))
+    $g.FillRectangle($ringBrush, ($s * 0.33), ($s * 0.15), ($s * 0.07), ($s * 0.14))
+    $g.FillRectangle($ringBrush, ($s * 0.60), ($s * 0.15), ($s * 0.07), ($s * 0.14))
+    $ringBrush.Dispose()
+
+    # Three written lines, the last one shorter: notes, not a form.
+    $lineBrush = New-Object System.Drawing.SolidBrush($ink)
+    $g.FillRectangle($lineBrush, ($s * 0.28), ($s * 0.47), ($s * 0.44), ($s * 0.06))
+    $g.FillRectangle($lineBrush, ($s * 0.28), ($s * 0.59), ($s * 0.44), ($s * 0.06))
+    $g.FillRectangle($lineBrush, ($s * 0.28), ($s * 0.71), ($s * 0.26), ($s * 0.06))
+    $lineBrush.Dispose()
+}
+
 function Save-Ico([string]$outPath, $drawMotif) {
     $sizes = 16, 24, 32, 48, 64, 256
     $pngs = foreach ($size in $sizes) {
@@ -200,3 +235,4 @@ Save-Ico (Join-Path $root 'crates\foundry32\assets\foundry32.ico') $DrawFoundry
 Save-Ico (Join-Path $root 'crates\mcp-console\assets\mcp-console.ico') $DrawConsole
 Save-Ico (Join-Path $root 'crates\witn\assets\witn.ico') $DrawWitn
 Save-Ico (Join-Path $root 'crates\jafiz\assets\jafiz.ico') $DrawJafiz
+Save-Ico (Join-Path $root 'crates\daily\assets\daily.ico') $DrawDaily
